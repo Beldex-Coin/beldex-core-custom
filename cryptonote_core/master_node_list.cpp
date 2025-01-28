@@ -34,9 +34,11 @@
 
 #include <boost/endian/conversion.hpp>
 
+#ifndef BELDEX_CORE_CUSTOM
 extern "C" {
 #include <sodium.h>
 }
+#endif // BELDEX_CORE_CUSTOM
 
 #include "ringct/rctSigs.h"
 #include "epee/net/local_ip.h"
@@ -45,7 +47,11 @@ extern "C" {
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_core/uptime_proof.h"
 #include "epee/int-util.h"
+
+#ifndef BELDEX_CORE_CUSTOM
 #include "common/scoped_message_writer.h"
+#endif // BELDEX_CORE_CUSTOM
+
 #include "common/i18n.h"
 #include "common/util.h"
 #include "common/random.h"
@@ -2748,6 +2754,7 @@ namespace master_nodes
     return true;
   }
 
+#ifndef BELDEX_CORE_CUSTOM
     //TODO: remove after HF17, mnode revision 1
     crypto::hash master_node_list::hash_uptime_proof_v12(const cryptonote::NOTIFY_UPTIME_PROOF_V12::request &proof) const
     {
@@ -2814,6 +2821,7 @@ namespace master_nodes
     const auto& keys = *m_master_node_keys;
     return uptime_proof::Proof(public_ip, storage_https_port, storage_omq_port, ss_version, quorumnet_port, belnet_version, keys);
   }
+  #endif // BELDEX_CORE_CUSTOM
 
 #ifdef __cpp_lib_erase_if // # (C++20)
   using std::erase_if;
@@ -2926,6 +2934,7 @@ namespace master_nodes
     return update_db;
   };
 
+#ifndef BELDEX_CORE_CUSTOM
   void proof_info::update_pubkey(const crypto::ed25519_public_key &pk) {
     if (pk == proof->pubkey_ed25519)
       return;
@@ -3190,6 +3199,7 @@ namespace master_nodes
 
     return true;
   }
+#endif
 
   void master_node_list::cleanup_proofs()
   {
@@ -3988,4 +3998,3 @@ namespace master_nodes
     return result;
   }
 }
-
