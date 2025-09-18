@@ -34,9 +34,9 @@
 #include "common/util.h"
 #include "rctSigs.h"
 #include "bulletproofs.h"
+#include "bulletproofs_plus.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
-#include "bulletproofs_plus.h"
 
 #undef BELDEX_DEFAULT_LOG_CATEGORY
 #define BELDEX_DEFAULT_LOG_CATEGORY "ringct"
@@ -271,9 +271,9 @@ namespace rct {
         keyV mu_P_to_hash(2*n+4); // domain, I, D, P, C, C_offset
         keyV mu_C_to_hash(2*n+4); // domain, I, D, P, C, C_offset
         sc_0(mu_P_to_hash[0].bytes);
-        memcpy(mu_P_to_hash[0].bytes, cryptonote::hashkey::CLSAG_AGG_0.data(),cryptonote::hashkey::CLSAG_AGG_0.size());
+        memcpy(mu_P_to_hash[0].bytes, config::HASH_KEY_CLSAG_AGG_0.data(), config::HASH_KEY_CLSAG_AGG_0.size());
         sc_0(mu_C_to_hash[0].bytes);
-        memcpy(mu_C_to_hash[0].bytes, cryptonote::hashkey::CLSAG_AGG_1.data(), cryptonote::hashkey::CLSAG_AGG_1.size());
+        memcpy(mu_C_to_hash[0].bytes, config::HASH_KEY_CLSAG_AGG_1.data(), config::HASH_KEY_CLSAG_AGG_1.size());
         for (size_t i = 1; i < n+1; ++i) {
             mu_P_to_hash[i] = P[i-1];
             mu_C_to_hash[i] = P[i-1];
@@ -296,7 +296,7 @@ namespace rct {
         keyV c_to_hash(2*n+5); // domain, P, C, C_offset, message, aG, aH
         key c;
         sc_0(c_to_hash[0].bytes);
-        memcpy(c_to_hash[0].bytes, cryptonote::hashkey::CLSAG_ROUND.data(), cryptonote::hashkey::CLSAG_ROUND.size());
+        memcpy(c_to_hash[0].bytes, config::HASH_KEY_CLSAG_ROUND.data(), config::HASH_KEY_CLSAG_ROUND.size());
         for (size_t i = 1; i < n+1; ++i)
         {
             c_to_hash[i] = P[i-1];
@@ -635,7 +635,7 @@ namespace rct {
         key prehash;
         std::string blob;
         {
-            serialization::binary_string_archiver ba;
+            serialization_s::binary_string_archiver ba;
             const_cast<rctSig&>(rv).serialize_rctsig_base(ba, inputs, outputs);
             blob = ba.str();
         }
@@ -686,8 +686,8 @@ namespace rct {
         }
         else
         {
-            kv.reserve((64 * 3 + 1) * rv.p.rangeSigs.size());
-            for (const auto &r : rv.p.rangeSigs)
+            kv.reserve((64*3+1) * rv.p.rangeSigs.size());
+            for (const auto &r: rv.p.rangeSigs)
             {
                 for (size_t n = 0; n < 64; ++n)
                     kv.push_back(r.asig.s0[n]);
@@ -803,7 +803,7 @@ namespace rct {
       key prehash;
       std::string blob;
       {
-        serialization::binary_string_archiver ba;
+        serialization_s::binary_string_archiver ba;
         const_cast<rctSig&>(rv).serialize_rctsig_base(ba, inputs, outputs);
         blob = ba.str();
       }
@@ -995,9 +995,9 @@ namespace rct {
             keyV mu_P_to_hash(2*n+4); // domain, I, D, P, C, C_offset
             keyV mu_C_to_hash(2*n+4); // domain, I, D, P, C, C_offset
             sc_0(mu_P_to_hash[0].bytes);
-            memcpy(mu_P_to_hash[0].bytes, cryptonote::hashkey::CLSAG_AGG_0.data(), cryptonote::hashkey::CLSAG_AGG_0.size());
+            memcpy(mu_P_to_hash[0].bytes, config::HASH_KEY_CLSAG_AGG_0.data(), config::HASH_KEY_CLSAG_AGG_0.size());
             sc_0(mu_C_to_hash[0].bytes);
-            memcpy(mu_C_to_hash[0].bytes, cryptonote::hashkey::CLSAG_AGG_1.data(), cryptonote::hashkey::CLSAG_AGG_1.size());
+            memcpy(mu_C_to_hash[0].bytes, config::HASH_KEY_CLSAG_AGG_1.data(), config::HASH_KEY_CLSAG_AGG_1.size());
             for (size_t i = 1; i < n+1; ++i) {
                 mu_P_to_hash[i] = pubs[i-1].dest;
                 mu_C_to_hash[i] = pubs[i-1].dest;
@@ -1019,7 +1019,7 @@ namespace rct {
             // Set up round hash
             keyV c_to_hash(2*n+5); // domain, P, C, C_offset, message, L, R
             sc_0(c_to_hash[0].bytes);
-            memcpy(c_to_hash[0].bytes, cryptonote::hashkey::CLSAG_ROUND.data(), cryptonote::hashkey::CLSAG_ROUND.size());
+            memcpy(c_to_hash[0].bytes, config::HASH_KEY_CLSAG_ROUND.data(), config::HASH_KEY_CLSAG_ROUND.size());
             for (size_t i = 1; i < n+1; ++i)
             {
                 c_to_hash[i] = pubs[i-1].dest;
@@ -1163,7 +1163,7 @@ namespace rct {
             //compute range proof
             rv.p.rangeSigs[i] = proveRange(rv.outPk[i].mask, outSk[i].mask, amounts[i]);
 #ifdef DBG
-            if (!bulletproof_or_plus)
+            if (!bulletproof)
                 CHECK_AND_ASSERT_THROW_MES(verRange(rv.outPk[i].mask, rv.p.rangeSigs[i]), "verRange failed on newly created proof");
 #endif
             //mask amount and mask
@@ -1257,7 +1257,7 @@ namespace rct {
             if (!bulletproof_or_plus)
                 rv.p.rangeSigs[i] = proveRange(rv.outPk[i].mask, outSk[i].mask, outamounts[i]);
 #ifdef DBG
-            if (!bulletproof)
+            if (!bulletproof_or_plus)
                 CHECK_AND_ASSERT_THROW_MES(verRange(rv.outPk[i].mask, rv.p.rangeSigs[i]), "verRange failed on newly created proof");
 #endif
         }
@@ -1272,7 +1272,7 @@ namespace rct {
             if (rct_config.range_proof_type == RangeProofType::PaddedBulletproof)
             {
                 rct::keyV C, masks;
-                if (hwdev.get_mode() == hw::device::mode::TRANSACTION_CREATE_FAKE)
+                if (hwdev.get_mode() == hw::device::device_mode::TRANSACTION_CREATE_FAKE)
                 {
                     // use a fake bulletproof for speed
                     if (plus)
@@ -1304,38 +1304,38 @@ namespace rct {
                 {
                     size_t batch_size = 1;
                     if (rct_config.range_proof_type == RangeProofType::MultiOutputBulletproof)
-                        while (batch_size * 2 + amounts_proved <= n_amounts && batch_size * 2 <= (plus ? cryptonote::TX_BULLETPROOF_PLUS_MAX_OUTPUTS : cryptonote::TX_BULLETPROOF_MAX_OUTPUTS))                   
+                        while (batch_size * 2 + amounts_proved <= n_amounts && batch_size * 2 <= (plus ? BULLETPROOF_PLUS_MAX_OUTPUTS : BULLETPROOF_MAX_OUTPUTS))
                             batch_size *= 2;
                     rct::keyV C, masks;
                     std::vector<uint64_t> batch_amounts(batch_size);
                     for (i = 0; i < batch_size; ++i)
                         batch_amounts[i] = outamounts[i + amounts_proved];
-                    if (hwdev.get_mode() == hw::device::mode::TRANSACTION_CREATE_FAKE)
+                    if (hwdev.get_mode() == hw::device::device_mode::TRANSACTION_CREATE_FAKE)
                     {
                         // use a fake bulletproof for speed
                         if (plus)
-                          rv.p.bulletproofs_plus.push_back(make_dummy_bulletproof_plus(batch_amounts, C, masks));
+                            rv.p.bulletproofs_plus.push_back(make_dummy_bulletproof_plus(batch_amounts, C, masks));
                         else
-                          rv.p.bulletproofs.push_back(make_dummy_bulletproof(batch_amounts, C, masks));
+                            rv.p.bulletproofs.push_back(make_dummy_bulletproof(batch_amounts, C, masks));
                     }
                     else
                     {
                         const epee::span<const key> keys{&amount_keys[amounts_proved], batch_size};
                         if (plus)
-                          rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlus(C, masks, batch_amounts, keys, hwdev));
+                            rv.p.bulletproofs_plus.push_back(proveRangeBulletproofPlus(C, masks, batch_amounts, keys, hwdev));
                         else
-                          rv.p.bulletproofs.push_back(proveRangeBulletproof(C, masks, batch_amounts, keys, hwdev));
+                            rv.p.bulletproofs.push_back(proveRangeBulletproof(C, masks, batch_amounts, keys, hwdev));
 #ifdef DBG
                         if (plus)
-                          CHECK_AND_ASSERT_THROW_MES(verBulletproofPlus(rv.p.bulletproofs_plus.back()), "verBulletproofPlus failed on newly created proof");
+                            CHECK_AND_ASSERT_THROW_MES(verBulletproofPlus(rv.p.bulletproofs_plus.back()), "verBulletproofPlus failed on newly created proof");
                         else
-                          CHECK_AND_ASSERT_THROW_MES(verBulletproof(rv.p.bulletproofs.back()), "verBulletproof failed on newly created proof");
+                            CHECK_AND_ASSERT_THROW_MES(verBulletproof(rv.p.bulletproofs.back()), "verBulletproof failed on newly created proof");
 #endif
                     }
                     for (i = 0; i < batch_size; ++i)
                     {
-                      rv.outPk[i + amounts_proved].mask = rct::scalarmult8(C[i]);
-                      outSk[i + amounts_proved].mask = masks[i];
+                        rv.outPk[i + amounts_proved].mask = rct::scalarmult8(C[i]);
+                        outSk[i + amounts_proved].mask = masks[i];
                     }
                     amounts_proved += batch_size;
                 }
@@ -1540,7 +1540,7 @@ namespace rct {
 
           rct::keyV masks(rv.outPk.size());
           for (size_t i = 0; i < rv.outPk.size(); i++) {
-              masks[i] = rv.outPk[i].mask;
+            masks[i] = rv.outPk[i].mask;
           }
           key sumOutpks = addKeys(masks);
           DP(sumOutpks);
@@ -1574,11 +1574,6 @@ namespace rct {
           }
         }
         if (!bpp_proofs.empty() && !verBulletproofPlus(bpp_proofs))
-        {
-          LOG_PRINT_L1("Aggregate range proof verified failed");
-          return false;
-        }
-        if (!bp_proofs.empty() && !verBulletproof(bp_proofs))
         {
           LOG_PRINT_L1("Aggregate range proof verified failed");
           return false;

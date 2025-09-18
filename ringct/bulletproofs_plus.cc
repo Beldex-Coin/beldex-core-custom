@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2020, The Monero Project
+// Copyright (c) 2017-2022, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -31,7 +31,7 @@
 // Preprint: https://eprint.iacr.org/2020/735, version 17 Jun 2020
 //
 // NOTE ON NOTATION:
-//  In the signature constructions used in Monero, commitments to zero are treated as
+//  In the signature constructions used in Beldex, commitments to zero are treated as
 //      public keys against the curve group generator `G`. This means that amount
 //      commitments must use another generator `H` for values in order to show balance.
 //  The result is that the roles of `g` and `h` in the preprint are effectively swapped
@@ -42,6 +42,7 @@
 #include <boost/thread/lock_guard.hpp>
 #include "epee/misc_log_ex.h"
 #include "epee/span.h"
+#include "common/varint.h"
 #include "cryptonote_config.h"
 extern "C"
 {
@@ -50,7 +51,6 @@ extern "C"
 #include "rctOps.h"
 #include "multiexp.h"
 #include "bulletproofs_plus.h"
-#include "common/varint.h"
 
 #undef BELDEX_DEFAULT_LOG_CATEGORY
 #define BELDEX_DEFAULT_LOG_CATEGORY "bulletproof_plus"
@@ -66,7 +66,7 @@ namespace rct
 
     // Proof bounds
     static constexpr size_t maxN = 64; // maximum number of bits in range
-    static constexpr size_t maxM = cryptonote::TX_BULLETPROOF_PLUS_MAX_OUTPUTS; // maximum number of outputs to aggregate into a single proof
+    static constexpr size_t maxM = BULLETPROOF_PLUS_MAX_OUTPUTS; // maximum number of outputs to aggregate into a single proof
 
     // Cached public generators
     static ge_p3 Hi_p3[maxN*maxM], Gi_p3[maxN*maxM];
@@ -109,7 +109,7 @@ namespace rct
     // Use hashed values to produce indexed public generators
     static ge_p3 get_exponent(const rct::key &base, size_t idx)
     {
-        static const std::string domain_separator(cryptonote::hashkey::BULLETPROOF_PLUS_EXPONENT);
+        static const std::string domain_separator(config::HASH_KEY_BULLETPROOF_PLUS_EXPONENT);
         std::string hashed = std::string((const char*)base.bytes, sizeof(base)) + domain_separator + tools::get_varint_data(idx);
         rct::key generator;
         ge_p3 generator_p3;
@@ -152,7 +152,7 @@ namespace rct
         sc_sub(TWO_SIXTY_FOUR_MINUS_ONE.bytes, TWO_SIXTY_FOUR_MINUS_ONE.bytes, ONE.bytes);
 
         // Generate the initial Fiat-Shamir transcript hash, which is constant across all proofs
-        const std::string domain_separator(cryptonote::hashkey::BULLETPROOF_PLUS_TRANSCRIPT);
+        const std::string domain_separator(config::HASH_KEY_BULLETPROOF_PLUS_TRANSCRIPT);
         ge_p3 initial_transcript_p3;
         rct::hash_to_p3(initial_transcript_p3, rct::hash2rct(crypto::cn_fast_hash(domain_separator.data(), domain_separator.size())));
         ge_p3_tobytes(initial_transcript.bytes, &initial_transcript_p3);
