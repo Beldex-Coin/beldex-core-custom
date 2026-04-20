@@ -35,10 +35,8 @@
 #include "common/hex.h"
 #include "cryptonote_tx_utils.h"
 #include "cryptonote_config.h"
-#ifndef BELDEX_CORE_CUSTOM
 #include "blockchain.h"
 #include "cryptonote_basic/miner.h"
-#endif // BELDEX_CORE_CUSTOM
 #include "cryptonote_basic/tx_extra.h"
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
@@ -255,7 +253,7 @@ namespace cryptonote
     uint64_t               amount;
     bool operator==(master_nodes::payout_entry const &other) const { return address == other.address; }
   };
-#ifndef BELDEX_CORE_CUSTOM
+
   bool construct_miner_tx(
       size_t height,
       size_t median_weight,
@@ -448,7 +446,7 @@ namespace cryptonote
     }
 
     uint64_t expected_amount = 0;
-    if (hard_fork_version <= cryptonote::network_version_16_bns)
+    if (hard_fork_version <= cryptonote::network_version_16)
     {
       // NOTE: Use the amount actually paid out when we split the master node
       // reward (across up to 4 recipients) which may actually pay out less than
@@ -567,7 +565,6 @@ namespace cryptonote
 
     return true;
   }
-#endif // BELDEX_CORE_CUSTOM
 
   crypto::public_key get_destination_view_key_pub(const std::vector<tx_destination_entry> &destinations, const std::optional<cryptonote::tx_destination_entry>& change_addr)
   {
@@ -1141,15 +1138,14 @@ namespace cryptonote
      return construct_tx_and_get_tx_key(sender_account_keys, subaddresses, sources, destinations_copy, change_addr, extra, tx, unlock_time, tx_key, additional_tx_keys, rct_config, NULL, tx_params);
   }
   //---------------------------------------------------------------
-#ifndef BELDEX_CORE_CUSTOM
   bool generate_genesis_block(block& bl, network_type nettype)
   {
       const auto& conf = get_config(nettype);
     //genesis block
     bl = {};
 
-    CHECK_AND_ASSERT_MES(oxenmq::is_hex(conf.GENESIS_TX), false, "failed to parse coinbase tx from hard coded blob");
-    std::string tx_bl = oxenmq::from_hex(conf.GENESIS_TX);
+    CHECK_AND_ASSERT_MES(oxenc::is_hex(conf.GENESIS_TX), false, "failed to parse coinbase tx from hard coded blob");
+    std::string tx_bl = oxenc::from_hex(conf.GENESIS_TX);
     bool r = parse_and_validate_tx_from_blob(tx_bl, bl.miner_tx);
     CHECK_AND_ASSERT_MES(r, false, "failed to parse coinbase tx from hard coded blob");
     bl.major_version = 1;
@@ -1202,9 +1198,9 @@ namespace cryptonote
     const blobdata bd        = get_block_hashing_blob(b);
     const uint8_t hf_version = b.major_version;
 
-// #if defined(BELDEX_INTEGRATION_TESTS)
-//     miners = 0;
-// #endif
+#if defined(BELDEX_INTEGRATION_TESTS)
+    miners = 0;
+#endif
 
     crypto::cn_slow_hash_type cn_type = cn_slow_hash_type::heavy_v1;
     if (nettype == FAKECHAIN)
@@ -1246,5 +1242,4 @@ namespace cryptonote
   {
     rx_reorg(split_height);
   }
-#endif // BELDEX_CORE_CUSTOM
 }
