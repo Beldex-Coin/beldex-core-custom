@@ -198,49 +198,6 @@ namespace rpc {
     };
   };
 
-  struct GET_BLOCKS_FAST_RPC : PUBLIC, LEGACY
-  {
-    static constexpr auto names() { return NAMES("get_blocks_fast", "getblocks_fast"); }
-
-    static constexpr size_t MAX_COUNT = 1000;
-
-    struct request
-    {
-      std::list<crypto::hash> block_ids; // First 10 blocks id goes sequential, next goes in pow(2,n) offset, like 2, 4, 8, 16, 32, 64 and so on, and the last one is always genesis block
-      uint64_t    start_height;          // The starting block's height.
-      bool        prune;                 // Prunes the blockchain, drops off 7/8 off the block iirc.
-      bool        no_miner_tx;           // Optional (false by default).
-
-      KV_MAP_SERIALIZABLE
-    };
-
-    struct tx_output_indices
-    {
-      std::vector<uint64_t> indices; // Array of unsigned int.
-
-      KV_MAP_SERIALIZABLE
-    };
-
-    struct block_output_indices
-    {
-      std::vector<tx_output_indices> indices; // Array of TX output indices:
-
-      KV_MAP_SERIALIZABLE
-    };
-
-    struct response
-    {
-      std::vector<block_complete_entry_rpc> blocks;     // Array of block complete entries
-      uint64_t    start_height;                         // The starting block's height.
-      uint64_t    current_height;                       // The current block height.
-      std::string status;                               // General RPC error code. "OK" means everything looks good.
-      std::string output_indices;                       // Array of indices.
-      bool untrusted;                                   // States if the result is obtained using the bootstrap mode, and is therefore not trusted (`true`), or when the daemon is fully synced (`false`).
-
-     KV_MAP_SERIALIZABLE
-    };
-  };
-
   BELDEX_RPC_DOC_INTROSPECT
   // Get blocks by height. Binary request.
   struct GET_BLOCKS_BY_HEIGHT : PUBLIC, BINARY
@@ -308,32 +265,6 @@ namespace rpc {
     };
   };
 
-BELDEX_RPC_DOC_INTROSPECT
-  // Get hashes. rpc request.
-  struct GET_HASHES_FAST_RPC : PUBLIC, LEGACY
-  {
-    static constexpr auto names() { return NAMES("get_hashes", "gethashes"); }
-
-    struct request
-    {
-      std::list<crypto::hash> block_ids; // First 10 blocks id goes sequential, next goes in pow(2,n) offset, like 2, 4, 8, 16, 32, 64 and so on, and the last one is always genesis block */
-      uint64_t    start_height;          // The starting block's height.
-
-      KV_MAP_SERIALIZABLE
-    };
-
-    struct response
-    {
-      std::vector<std::string>  m_block_ids; // Binary array of hashes, See block_ids above.
-      uint64_t    start_height;              // The starting block's height.
-      uint64_t    current_height;            // The current block height.
-      std::string status;                    // General RPC error code. "OK" means everything looks good.
-      bool untrusted;                        // States if the result is obtained using the bootstrap mode, and is therefore not trusted (`true`), or when the daemon is fully synced (`false`).
-
-      KV_MAP_SERIALIZABLE
-    };
-  };
-
   BELDEX_RPC_DOC_INTROSPECT
   // Look up one or more transactions by hash.
   struct GET_TRANSACTIONS : PUBLIC, LEGACY
@@ -371,14 +302,18 @@ BELDEX_RPC_DOC_INTROSPECT
       };
       struct bns_details
       {
+        uint8_t     version;                     // The version which is given when the registrations version = 1 after the hf18
         std::optional<bool> buy;                 // Provided and true iff this is an BNS buy record
         std::optional<bool> update;              // Provided and true iff this is an BNS record update
         std::optional<bool> renew;               // Provided and true iff this is an BNS record renewal
-        std::string type;                        // The BNS request type.  For registrations: "belnet", "bchat", "wallet"; for a record update: "update"
+        std::optional<std::string> type;         // The BNS request type.  For registrations: "belnet", "bchat", "wallet"; for a record update: "update"
         std::optional<uint64_t> blocks;          // The registration length in blocks (only applies to belnet registrations; bchat/wallet registrations do not expire)
         std::string name_hash;                   // The hashed name of the record being purchased/updated, in hex (the actual name is not provided on the blockchain).
         std::optional<std::string> prev_txid;    // For an update, this points at the txid of the previous bns update transaction.
-        std::optional<std::string> value;        // The encrypted value of the record, in hex.  Note that this is encrypted using the actual name itself (*not* the hashed name).
+        std::optional<std::string> value_bchat;  // The encrypted value of the record, in hex for the bchat.  Note that this is encrypted using the actual name itself (*not* the hashed name).
+        std::optional<std::string> value_wallet; // The encrypted value of the record, in hex for the wallet.  Note that this is encrypted using the actual name itself (*not* the hashed name).
+        std::optional<std::string> value_belnet; // The encrypted value of the record, in hex for the belnet.  Note that this is encrypted using the actual name itself (*not* the hashed name).
+        std::optional<std::string> value_eth_addr;// The encrypted value of the record, in hex for the belnet.  Note that this is encrypted using the actual name itself (*not* the hashed name).
         std::optional<std::string> owner;        // The owner of this record; this can be a main wallet, wallet subaddress, or a plain public key.
         std::optional<std::string> backup_owner; // Backup owner wallet/pubkey of the record, if provided.
         KV_MAP_SERIALIZABLE
@@ -601,7 +536,6 @@ BELDEX_RPC_DOC_INTROSPECT
     {
       std::string tx_as_hex; // Full transaction information as hexidecimal string.
       bool do_not_relay;     // (Optional: Default false) Stop relaying transaction to other nodes.  Ignored if `flash` is true.
-      bool do_sanity_checks; // (Optional: Default true) Verify TX params have sane values.
       bool flash;            // (Optional: Default false) Submit this as a flash tx rather than into the mempool.
 
       KV_MAP_SERIALIZABLE
@@ -665,7 +599,7 @@ BELDEX_RPC_DOC_INTROSPECT
       uint32_t threads_count;            // Number of running mining threads.
       std::string address;               // Account address daemon is mining to. Empty if not mining.
       std::string pow_algorithm;         // Current hashing algorithm name
-      uint32_t block_target;             // The expected time to solve per block, i.e. TARGET_BLOCK_TIMe
+      uint32_t block_target;             // The expected time to solve per block, i.e. TARGET_BLOCK_TIME_OLD
       uint64_t block_reward;             // Block reward for the current block being mined.
       uint64_t difficulty;               // The difficulty for the current block being mined.
 
@@ -710,7 +644,7 @@ BELDEX_RPC_DOC_INTROSPECT
       uint64_t block_weight_limit;          // Maximum allowed block weight.
       uint64_t block_size_median;           // Median block size of latest 100 blocks.
       uint64_t block_weight_median;         // Median block weight of latest 100 blocks.
-      std::array<int, 3> bns_counts;        // BNS registration counts, [bchat, wallet, belnet]
+      int bns_counts;                       // BNS registration counts.
       std::optional<bool> master_node;                    // Will be true if the node is running in --service-node mode.
       std::optional<uint64_t> start_time;                  // Start time of the daemon, as UNIX time.
       std::optional<uint64_t> last_storage_server_ping;    // Last ping time of the storage server (0 if never or not running as a service node)
@@ -1687,8 +1621,8 @@ BELDEX_RPC_DOC_INTROSPECT
     {
       std::string status;       // General RPC error code. "OK" means everything looks good.
       uint64_t emission_amount; // Amount of coinbase reward in atomic units.
-      uint64_t fee_amount;      // Amount of fees in atomic units.
-      uint64_t burn_amount;      // Amount of burnt beldex.
+      int64_t fee_amount;       // Amount of fees in atomic units.
+      int64_t burn_amount;      // Amount of burnt beldex.
 
       KV_MAP_SERIALIZABLE
     };
@@ -1854,37 +1788,6 @@ BELDEX_RPC_DOC_INTROSPECT
       KV_MAP_SERIALIZABLE
     };
   };
-
-  // BELDEX_RPC_DOC_INTROSPECT
-  // struct GET_OUTPUT_KEYS : PUBLIC
-  // {
-  //   static constexpr auto names() { return NAMES("get_output_keys"); }
-
-  //   struct output_amount_and_index
-  //   {
-  //     uint64_t amount;
-  //     uint64_t index;
-  //   };
-  //   struct request
-  //   {
-  //     std::vector<output_amount_and_index> outputs;
-
-  //     KV_MAP_SERIALIZABLE
-  //   };
-
-  //   struct output_key_mask_unlocked
-  //   {
-  //     crypto::public_key key;
-  //     rct::key mask;
-  //     bool unlocked;
-  //   };
-
-  //   struct response
-  //   {
-  //     std::vector<output_key_mask_unlocked> keys;
-  //     KV_MAP_SERIALIZABLE
-  //   };
-  // };
 
   BELDEX_RPC_DOC_INTROSPECT
   // Exactly like GET_OUTPUT_DISTRIBUTION, but does a binary RPC transfer instead of JSON
@@ -2289,6 +2192,7 @@ BELDEX_RPC_DOC_INTROSPECT
       std::array<uint16_t, 3> version; // Storage server version
       uint16_t https_port; // Storage server https port to include in uptime proofs
       uint16_t omq_port; // Storage Server oxenmq port to include in uptime proofs
+      std::string pubkey_ed25519; // Master node Ed25519 pubkey for verifying that storage server is using the right one
       KV_MAP_SERIALIZABLE
     };
 
@@ -2303,6 +2207,7 @@ BELDEX_RPC_DOC_INTROSPECT
     struct request
     {
       std::array<uint16_t, 3> version; // Belnet version
+      std::string pubkey_ed25519; // Master node Ed25519 pubkey for verifying that belnet is using the right one
       KV_MAP_SERIALIZABLE
     };
 
@@ -2535,18 +2440,9 @@ BELDEX_RPC_DOC_INTROSPECT
     static constexpr auto names() { return NAMES("bns_names_to_owners", "lns_names_to_owners"); }
 
     static constexpr size_t MAX_REQUEST_ENTRIES      = 256;
-    static constexpr size_t MAX_TYPE_REQUEST_ENTRIES = 8;
-    struct request_entry
-    {
-      std::string name_hash; // The 32-byte BLAKE2b hash of the name to resolve to a public key via Beldex Name Service. The value must be provided either in hex (64 hex digits) or base64 (44 characters with padding, or 43 characters without).
-      std::vector<uint16_t> types; // If empty, query all types. Currently supported types are 0 (bchat) and 2 (belnet). In future updates more mapping types will be available.
-
-      KV_MAP_SERIALIZABLE
-    };
-
     struct request
     {
-      std::vector<request_entry> entries; // Entries to look up
+      std::vector<std::string> entries; // Entries to look up
       bool include_expired;               // Optional: if provided and true, include entries in the results even if they are expired
 
       KV_MAP_SERIALIZABLE
@@ -2554,22 +2450,56 @@ BELDEX_RPC_DOC_INTROSPECT
 
     struct response_entry
     {
-      uint64_t entry_index;     // The index in request_entry's `entries` array that was resolved via Beldex Name Service.
-      bns::mapping_type type;   // The type of Beldex Name Service entry that the owner owns: currently supported values are 0 (bchat), 1 (wallet) and 2 (belnet)
-      std::string name_hash;    // The hash of the name that was queried, in base64
-      std::string owner;        // The public key that purchased the Beldex Name Service entry.
-      std::optional<std::string> backup_owner; // The backup public key that the owner specified when purchasing the Beldex Name Service entry. Omitted if no backup owner.
-      std::string encrypted_value; // The encrypted value that the name maps to. See the `BNS_RESOLVE` description for information on how this value can be decrypted.
-      uint64_t update_height;   // The last height that this Beldex Name Service entry was updated on the Blockchain.
-      std::optional<uint64_t> expiration_height; // For records that expire, this will be set to the expiration block height.
-      std::string txid;                          // The txid of the mapping's most recent update or purchase.
-
+      uint64_t entry_index;                     // The index in request_entry's `entries` array that was resolved via Beldex Name Service.
+      std::string name_hash;                    // The hash of the name that was queried, in base64
+      std::string owner;                        // The public key that purchased the Beldex Name Service entry.
+      std::optional<std::string> backup_owner;  // The backup public key that the owner specified when purchasing the Beldex Name Service entry. Omitted if no backup owner.
+      std::string encrypted_bchat_value;        // The encrypted value that the name maps to. See the `BNS_RESOLVE` description for information on how this value can be decrypted.
+      std::string encrypted_wallet_value;       // The encrypted value that the name maps to. See the `BNS_RESOLVE` description for information on how this value can be decrypted.
+      std::string encrypted_belnet_value;       // The encrypted value that the name maps to. See the `BNS_RESOLVE` description for information on how this value can be decrypted.
+      std::string encrypted_eth_addr_value;     // The encrypted value that the name maps to. See the `BNS_RESOLVE` description for information on how this value can be decrypted.
+      uint64_t update_height;                   // The last height that this Beldex Name Service entry was updated on the Blockchain.
+      std::optional<uint64_t> expiration_height;// For records that expire, this will be set to the expiration block height.
+      std::string txid;                         // The txid of the mapping's most recent update or purchase.
       KV_MAP_SERIALIZABLE
     };
 
     struct response
     {
       std::vector<response_entry> entries;
+      std::string status; // Generic RPC error code. "OK" is the success value.
+
+      KV_MAP_SERIALIZABLE
+    };
+  };
+
+  BELDEX_RPC_DOC_INTROSPECT
+  // Get the name mapping for a Beldex Name Service entry. Beldex currently supports mappings
+  // for Bchat and Belnet and wallet.
+  struct BNS_LOOKUP : PUBLIC
+  {
+    static constexpr auto names() { return NAMES("bns_lookup"); }
+
+    static constexpr size_t MAX_REQUEST_ENTRIES      = 256;
+    struct request
+    {
+      std::string name; // Entries to look up
+      KV_MAP_SERIALIZABLE
+    };
+
+    struct response
+    {
+      std::string name_hash;                    // The hash of the name that was queried, in base64
+      std::string owner;                        // The public key that purchased the Beldex Name Service entry.
+      std::optional<std::string> backup_owner;  // The backup public key that the owner specified when purchasing the Beldex Name Service entry. Omitted if no backup owner.
+      std::optional<std::string> bchat_value;   // The encrypted value that the name maps to. See the `BNS_RESOLVE` description for information on how this value can be decrypted.
+      std::optional<std::string> wallet_value;  // The encrypted value that the name maps to. See the `BNS_RESOLVE` description for information on how this value can be decrypted.
+      std::optional<std::string> belnet_value;  // The encrypted value that the name maps to. See the `BNS_RESOLVE` description for information on how this value can be decrypted.
+      std::optional<std::string> eth_addr_value;  // The encrypted value that the name maps to. See the `BNS_RESOLVE` description for information on how this value can be decrypted.
+      uint64_t update_height;                   // The last height that this Beldex Name Service entry was updated on the Blockchain.
+      std::optional<uint64_t> expiration_height;// For records that expire, this will be set to the expiration block height.
+      std::string txid;                         // The txid of the mapping's most recent update or purchase.
+      
       std::string status; // Generic RPC error code. "OK" is the success value.
 
       KV_MAP_SERIALIZABLE
@@ -2594,16 +2524,17 @@ BELDEX_RPC_DOC_INTROSPECT
 
     struct response_entry
     {
-      uint64_t    request_index;   // (Deprecated) The index in request's `entries` array that was resolved via Beldex Name Service.
-      bns::mapping_type type;      // The category the Beldex Name Service entry belongs to; currently 0 for Bchat, 1 for Wallet and 2 for Belnet.
-      std::string name_hash;       // The hash of the name that the owner purchased via Beldex Name Service in base64
-      std::string owner;           // The backup public key specified by the owner that purchased the Beldex Name Service entry.
-      std::optional<std::string> backup_owner; // The backup public key specified by the owner that purchased the Beldex Name Service entry. Omitted if no backup owner.
-      std::string encrypted_value; // The encrypted value that the name maps to, in hex. This value is encrypted using the name (not the hash) as the secret.
-      uint64_t    update_height;   // The last height that this Beldex Name Service entry was updated on the Blockchain.
-      std::optional<uint64_t> expiration_height; // For records that expire, this will be set to the expiration block height.
-      std::string txid;                     // The txid of the mapping's most recent update or purchase.
-
+      uint64_t    request_index;                // (Deprecated) The index in request's `entries` array that was resolved via Beldex Name Service.
+      std::string name_hash;                    // The hash of the name that the owner purchased via Beldex Name Service in base64
+      std::string owner;                        // The backup public key specified by the owner that purchased the Beldex Name Service entry.
+      std::optional<std::string> backup_owner;  // The backup public key specified by the owner that purchased the Beldex Name Service entry. Omitted if no backup owner.
+      std::string encrypted_bchat_value;        // The bchat encrypted value that the name maps to, in hex. This value of bchat is encrypted using the name (not the hash) as the secret.
+      std::string encrypted_wallet_value;       // The wallet encrypted value that the name maps to, in hex. This value of wallet is encrypted using the name (not the hash) as the secret.
+      std::string encrypted_belnet_value;       // The belnet encrypted value that the name maps to, in hex. This value of belnet is encrypted using the name (not the hash) as the secret.
+      std::string encrypted_eth_addr_value;     // The eth_address encrypted value that the name maps to, in hex. This value of eth_address is encrypted using the name (not the hash) as the secret.
+      uint64_t    update_height;                // The last height that this Beldex Name Service entry was updated on the Blockchain.
+      std::optional<uint64_t> expiration_height;// For records that expire, this will be set to the expiration block height.
+      std::string txid;                         // The txid of the mapping's most recent update or purchase.
       KV_MAP_SERIALIZABLE
     };
 
@@ -2641,7 +2572,7 @@ BELDEX_RPC_DOC_INTROSPECT
 
     struct request
     {
-      uint16_t type;         // The BNS type (mandatory); currently supported values are: 0 = bchat, 1 = wallet, 2 = belnet.
+      uint16_t type;         // The BNS type (mandatory); currently supported values are: 0 = bchat, 1 = wallet, 2 = belnet. 6=eth_addr
       std::string name_hash; // The 32-byte BLAKE2b hash of the name to look up, encoded as 64 hex digits or 44/43 base64 characters (with/without padding).
 
       KV_MAP_SERIALIZABLE
@@ -2656,6 +2587,29 @@ BELDEX_RPC_DOC_INTROSPECT
     };
   };
 
+  BELDEX_RPC_DOC_INTROSPECT
+  // Takes a BNS encrypted value and decrypts the mapping value using the BNS name.
+  struct BNS_VALUE_DECRYPT : PUBLIC
+  {
+    static constexpr auto names() { return NAMES("bns_value_decrypt"); }
+
+    struct request
+    {
+      std::string name;            // The BNS name of the given encrypted value.
+      std::string type;            // The mapping type: "bchat" or "belnet" or "wallet".
+      std::string encrypted_value; // The encrypted value represented in hex.
+
+      KV_MAP_SERIALIZABLE
+    };
+
+    struct response
+    {
+      std::string value; // The value decrypted
+
+      KV_MAP_SERIALIZABLE
+    };
+  };
+  
   BELDEX_RPC_DOC_INTROSPECT
   // Clear TXs from the daemon cache, currently only the cache storing TX hashes that were previously verified bad by the daemon.
   struct FLUSH_CACHE : RPC_COMMAND
@@ -2679,11 +2633,9 @@ BELDEX_RPC_DOC_INTROSPECT
   using core_rpc_types = tools::type_list<
     GET_HEIGHT,
     GET_BLOCKS_FAST,
-    GET_BLOCKS_FAST_RPC,
     GET_BLOCKS_BY_HEIGHT,
     GET_ALT_BLOCKS_HASHES,
     GET_HASHES_FAST,
-    GET_HASHES_FAST_RPC,
     GET_TRANSACTIONS,
     IS_KEY_IMAGE_SPENT,
     GET_TX_GLOBAL_OUTPUTS_INDEXES,
@@ -2736,7 +2688,6 @@ BELDEX_RPC_DOC_INTROSPECT
     RELAY_TX,
     SYNC_INFO,
     GET_OUTPUT_DISTRIBUTION,
-    // GET_OUTPUT_KEYS,
     GET_OUTPUT_DISTRIBUTION_BIN,
     POP_BLOCKS,
     PRUNE_BLOCKCHAIN,
@@ -2758,8 +2709,10 @@ BELDEX_RPC_DOC_INTROSPECT
     TEST_TRIGGER_P2P_RESYNC,
     TEST_TRIGGER_UPTIME_PROOF,
     BNS_NAMES_TO_OWNERS,
+    BNS_LOOKUP,
     BNS_OWNERS_TO_NAMES,
     BNS_RESOLVE,
+    BNS_VALUE_DECRYPT,
     FLUSH_CACHE
   >;
 

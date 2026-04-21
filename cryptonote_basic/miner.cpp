@@ -31,15 +31,13 @@
 // Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 #include <numeric>
-#include <oxenmq/base64.h>
-#include "epee/misc_language.h"
+#include <oxenc/base64.h>
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "epee/misc_os_dependent.h"
 #include "common/command_line.h"
 #include "common/util.h"
 #include "common/file.h"
 #include "common/string_util.h"
-#include "epee/string_coding.h"
 #include "epee/string_tools.h"
 #include "epee/storages/portable_storage_template_helper.h"
 
@@ -254,13 +252,13 @@ namespace cryptonote
         tools::trim(extra_vec[i]);
         if(!extra_vec[i].size())
           continue;
-        if (!oxenmq::is_base64(extra_vec[i]))
+        if (!oxenc::is_base64(extra_vec[i]))
         {
           MWARNING("Invalid (non-base64) extra message `" << extra_vec[i] << "'");
           continue;
         }
 
-        std::string buff = oxenmq::from_base64(extra_vec[i]);
+        std::string buff = oxenc::from_base64(extra_vec[i]);
         if(buff != "0")
           m_extra_messages[i] = buff;
       }
@@ -269,7 +267,7 @@ namespace cryptonote
       fs::path filename = m_config_dir / MINER_CONFIG_FILE_NAME;
       if (std::string contents;
           !tools::slurp_file(filename, contents) ||
-          !epee::serialization_e::load_t_from_json(m_config, contents))
+          !epee::serialization::load_t_from_json(m_config, contents))
       {
         MERROR("Failed to load data from " << filename);
         return false;
@@ -457,7 +455,7 @@ namespace cryptonote
     {
       if(m_pausers_count)//anti split workaround
       {
-        epee::misc_utils::sleep_no_w(100);
+        std::this_thread::sleep_for(100ms);
         continue;
       }
 
@@ -476,7 +474,7 @@ namespace cryptonote
       if(!local_template_ver)//no any set_block_template call
       {
         LOG_PRINT_L2("Block template not set yet");
-        epee::misc_utils::sleep_no_w(1000);
+        std::this_thread::sleep_for(1s);
         continue;
       }
 
@@ -502,7 +500,7 @@ namespace cryptonote
           --m_config.current_extra_message_index;
         else if (!m_config_dir.empty())
           //success update, lets update config
-          if (std::string json; epee::serialization_e::store_t_to_json(m_config, json))
+          if (std::string json; epee::serialization::store_t_to_json(m_config, json))
             tools::dump_file(m_config_dir / fs::u8path(MINER_CONFIG_FILE_NAME), json);
       }
 

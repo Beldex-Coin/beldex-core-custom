@@ -87,7 +87,7 @@ namespace cryptonote::rpc {
   };
 
   /// Junk that epee makes us deal with to pass in a generically parsed json value
-  using jsonrpc_params = std::pair<epee::serialization_e::portable_storage, epee::serialization_e::storage_entry>;
+  using jsonrpc_params = std::pair<epee::serialization::portable_storage, epee::serialization::storage_entry>;
 
   enum struct rpc_source : uint8_t { internal, http, omq };
 
@@ -192,11 +192,9 @@ namespace cryptonote::rpc {
 
     GET_HEIGHT::response                                invoke(GET_HEIGHT::request&& req, rpc_context context);
     GET_BLOCKS_FAST::response                           invoke(GET_BLOCKS_FAST::request&& req, rpc_context context);
-    GET_BLOCKS_FAST_RPC::response                       invoke(GET_BLOCKS_FAST_RPC::request&& req, rpc_context context);
     GET_ALT_BLOCKS_HASHES::response                     invoke(GET_ALT_BLOCKS_HASHES::request&& req, rpc_context context);
     GET_BLOCKS_BY_HEIGHT::response                      invoke(GET_BLOCKS_BY_HEIGHT::request&& req, rpc_context context);
     GET_HASHES_FAST::response                           invoke(GET_HASHES_FAST::request&& req, rpc_context context);
-    GET_HASHES_FAST_RPC::response                       invoke(GET_HASHES_FAST_RPC::request&& req, rpc_context context);
     GET_TRANSACTIONS::response                          invoke(GET_TRANSACTIONS::request&& req, rpc_context context);
     IS_KEY_IMAGE_SPENT::response                        invoke(IS_KEY_IMAGE_SPENT::request&& req, rpc_context context);
     GET_TX_GLOBAL_OUTPUTS_INDEXES::response             invoke(GET_TX_GLOBAL_OUTPUTS_INDEXES::request&& req, rpc_context context);
@@ -270,8 +268,10 @@ namespace cryptonote::rpc {
     TEST_TRIGGER_P2P_RESYNC::response                   invoke(TEST_TRIGGER_P2P_RESYNC::request&& req, rpc_context context);
     TEST_TRIGGER_UPTIME_PROOF::response                 invoke(TEST_TRIGGER_UPTIME_PROOF::request&& req, rpc_context context);
     BNS_NAMES_TO_OWNERS::response                       invoke(BNS_NAMES_TO_OWNERS::request&& req, rpc_context context);
+    BNS_LOOKUP::response                                invoke(BNS_LOOKUP::request&& req, rpc_context context);
     BNS_OWNERS_TO_NAMES::response                       invoke(BNS_OWNERS_TO_NAMES::request&& req, rpc_context context);
     BNS_RESOLVE::response                               invoke(BNS_RESOLVE::request&& req, rpc_context context);
+    BNS_VALUE_DECRYPT::response                         invoke(BNS_VALUE_DECRYPT::request&& req, rpc_context context);
     FLUSH_CACHE::response                               invoke(FLUSH_CACHE::request&& req, rpc_context);
 
 #if defined(BELDEX_ENABLE_INTEGRATION_TEST_HOOKS)
