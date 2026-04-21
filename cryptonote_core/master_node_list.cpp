@@ -33,10 +33,15 @@
 #include <chrono>
 #include <fmt/core.h>
 #include <boost/endian/conversion.hpp>
+#ifndef BELDEX_CORE_CUSTOM
 
 extern "C" {
 #include <sodium.h>
 }
+#endif // BELDEX_CORE_CUSTOM
+
+#include <fmt/format.h>
+#include "serialization/binary_utils.h"
 
 #include "ringct/rctSigs.h"
 #include "epee/net/local_ip.h"
@@ -45,7 +50,11 @@ extern "C" {
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_core/uptime_proof.h"
 #include "epee/int-util.h"
+#ifndef BELDEX_CORE_CUSTOM
+
 #include "common/scoped_message_writer.h"
+#endif // BELDEX_CORE_CUSTOM
+
 #include "common/i18n.h"
 #include "common/util.h"
 #include "common/random.h"
@@ -2706,9 +2715,9 @@ namespace master_nodes
     m_transient.cache_data_blob.clear();
     if (m_transient.state_added_to_archive)
     {
-      serialization::binary_string_archiver ba;
+      serialization_s::binary_string_archiver ba;
       try {
-        serialization::serialize(ba, m_transient.cache_long_term_data);
+        serialization_s::serialize(ba, m_transient.cache_long_term_data);
       } catch (const std::exception& e) {
         LOG_ERROR("Failed to store master node info: failed to serialize long term data: " << e.what());
         return false;
@@ -2723,9 +2732,9 @@ namespace master_nodes
 
     m_transient.cache_data_blob.clear();
     {
-      serialization::binary_string_archiver ba;
+      serialization_s::binary_string_archiver ba;
       try {
-        serialization::serialize(ba, m_transient.cache_short_term_data);
+        serialization_s::serialize(ba, m_transient.cache_short_term_data);
       } catch (const std::exception& e) {
         LOG_ERROR("Failed to store master node info: failed to serialize short term data: " << e.what());
         return false;
@@ -2741,6 +2750,7 @@ namespace master_nodes
     m_transient.state_added_to_archive = false;
     return true;
   }
+  #ifndef BELDEX_CORE_CUSTOM
 
   //TODO: remove after HF18, mnode revision 1
   crypto::hash master_node_list::hash_uptime_proof(const cryptonote::NOTIFY_UPTIME_PROOF::request &proof) const
@@ -2780,7 +2790,7 @@ namespace master_nodes
     const auto& keys = *m_master_node_keys;
     return uptime_proof::Proof(public_ip, storage_https_port, storage_omq_port, ss_version, quorumnet_port, belnet_version, keys);
   }
-
+  #endif // BELDEX_CORE_CUSTOM
 #ifdef __cpp_lib_erase_if // # (C++20)
   using std::erase_if;
 #else
@@ -2884,7 +2894,7 @@ namespace master_nodes
 
     return update_db;
   };
-
+#ifndef BELDEX_CORE_CUSTOM
   void proof_info::update_pubkey(const crypto::ed25519_public_key &pk) {
     if (pk == proof->pubkey_ed25519)
       return;
@@ -3092,7 +3102,7 @@ namespace master_nodes
 
     return true;
   }
-
+#endif
   void master_node_list::cleanup_proofs()
   {
     MDEBUG("Cleaning up expired MN proofs");
