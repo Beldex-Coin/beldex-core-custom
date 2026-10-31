@@ -48,33 +48,6 @@ KV_SERIALIZE_MAP_CODE_BEGIN(GET_BLOCKS_FAST::response)
   KV_SERIALIZE(untrusted)
 KV_SERIALIZE_MAP_CODE_END()
 
-KV_SERIALIZE_MAP_CODE_BEGIN(GET_BLOCKS_FAST_RPC::request)
-  KV_SERIALIZE_CONTAINER_POD_AS_BLOB(block_ids)
-  KV_SERIALIZE(start_height)
-  KV_SERIALIZE(prune)
-  KV_SERIALIZE_OPT(no_miner_tx, false)
-KV_SERIALIZE_MAP_CODE_END()
-
-
-KV_SERIALIZE_MAP_CODE_BEGIN(GET_BLOCKS_FAST_RPC::tx_output_indices)
-  KV_SERIALIZE(indices)
-KV_SERIALIZE_MAP_CODE_END()
-
-
-KV_SERIALIZE_MAP_CODE_BEGIN(GET_BLOCKS_FAST_RPC::block_output_indices)
-  KV_SERIALIZE(indices)
-KV_SERIALIZE_MAP_CODE_END()
-
-
-KV_SERIALIZE_MAP_CODE_BEGIN(GET_BLOCKS_FAST_RPC::response)
-  KV_SERIALIZE(blocks)
-  KV_SERIALIZE(start_height)
-  KV_SERIALIZE(current_height)
-  KV_SERIALIZE(status)
-  KV_SERIALIZE(output_indices)
-  KV_SERIALIZE(untrusted)
-KV_SERIALIZE_MAP_CODE_END()
-
 
 KV_SERIALIZE_MAP_CODE_BEGIN(GET_BLOCKS_BY_HEIGHT::request)
   KV_SERIALIZE(heights)
@@ -103,20 +76,6 @@ KV_SERIALIZE_MAP_CODE_END()
 
 KV_SERIALIZE_MAP_CODE_BEGIN(GET_HASHES_FAST::response)
   KV_SERIALIZE_CONTAINER_POD_AS_BLOB(m_block_ids)
-  KV_SERIALIZE(start_height)
-  KV_SERIALIZE(current_height)
-  KV_SERIALIZE(status)
-  KV_SERIALIZE(untrusted)
-KV_SERIALIZE_MAP_CODE_END()
-
-KV_SERIALIZE_MAP_CODE_BEGIN(GET_HASHES_FAST_RPC::request)
-  KV_SERIALIZE_CONTAINER_POD_AS_BLOB(block_ids)
-  KV_SERIALIZE(start_height)
-KV_SERIALIZE_MAP_CODE_END()
-
-
-KV_SERIALIZE_MAP_CODE_BEGIN(GET_HASHES_FAST_RPC::response)
-  KV_SERIALIZE(m_block_ids)
   KV_SERIALIZE(start_height)
   KV_SERIALIZE(current_height)
   KV_SERIALIZE(status)
@@ -153,6 +112,7 @@ KV_SERIALIZE_MAP_CODE_BEGIN(GET_TRANSACTIONS::extra_entry::state_change)
   KV_SERIALIZE(reasons_maybe);
 KV_SERIALIZE_MAP_CODE_END()
 KV_SERIALIZE_MAP_CODE_BEGIN(GET_TRANSACTIONS::extra_entry::bns_details)
+  KV_SERIALIZE(version)  
   KV_SERIALIZE(buy)
   KV_SERIALIZE(update)
   KV_SERIALIZE(renew)
@@ -160,7 +120,10 @@ KV_SERIALIZE_MAP_CODE_BEGIN(GET_TRANSACTIONS::extra_entry::bns_details)
   KV_SERIALIZE(blocks)
   KV_SERIALIZE(name_hash)
   KV_SERIALIZE(prev_txid)
-  KV_SERIALIZE(value)
+  KV_SERIALIZE(value_bchat)
+  KV_SERIALIZE(value_wallet)
+  KV_SERIALIZE(value_belnet)
+  KV_SERIALIZE(value_eth_addr)
   KV_SERIALIZE(owner)
   KV_SERIALIZE(backup_owner)
 KV_SERIALIZE_MAP_CODE_END()
@@ -294,7 +257,6 @@ KV_SERIALIZE_MAP_CODE_END()
 KV_SERIALIZE_MAP_CODE_BEGIN(SEND_RAW_TX::request)
   KV_SERIALIZE(tx_as_hex)
   KV_SERIALIZE_OPT(do_not_relay, false)
-  KV_SERIALIZE_OPT(do_sanity_checks, true)
   KV_SERIALIZE_OPT(flash, false)
 KV_SERIALIZE_MAP_CODE_END()
 
@@ -391,13 +353,13 @@ KV_SERIALIZE_MAP_CODE_BEGIN(GETBLOCKCOUNT::response)
 KV_SERIALIZE_MAP_CODE_END()
 
 
-bool GETBLOCKHASH::request::load(epee::serialization_e::portable_storage& ps, epee::serialization_e::section* hparent_section)
+bool GETBLOCKHASH::request::load(epee::serialization::portable_storage& ps, epee::serialization::section* hparent_section)
 {
-  return epee::serialization_e::perform_serialize<false>(height, ps, hparent_section, "height");
+  return epee::serialization::perform_serialize<false>(height, ps, hparent_section, "height");
 }
-bool GETBLOCKHASH::request::store(epee::serialization_e::portable_storage& ps, epee::serialization_e::section* hparent_section)
+bool GETBLOCKHASH::request::store(epee::serialization::portable_storage& ps, epee::serialization::section* hparent_section)
 {
-  return epee::serialization_e::perform_serialize<true>(height, ps, hparent_section, "height");
+  return epee::serialization::perform_serialize<true>(height, ps, hparent_section, "height");
 }
 
 
@@ -424,13 +386,13 @@ KV_SERIALIZE_MAP_CODE_BEGIN(GETBLOCKTEMPLATE::response)
 KV_SERIALIZE_MAP_CODE_END()
 
 
-bool SUBMITBLOCK::request::load(epee::serialization_e::portable_storage& ps, epee::serialization_e::section* hparent_section)
+bool SUBMITBLOCK::request::load(epee::serialization::portable_storage& ps, epee::serialization::section* hparent_section)
 {
-  return epee::serialization_e::perform_serialize<false>(blob, ps, hparent_section, "blob");
+  return epee::serialization::perform_serialize<false>(blob, ps, hparent_section, "blob");
 }
-bool SUBMITBLOCK::request::store(epee::serialization_e::portable_storage& ps, epee::serialization_e::section* hparent_section)
+bool SUBMITBLOCK::request::store(epee::serialization::portable_storage& ps, epee::serialization::section* hparent_section)
 {
-  return epee::serialization_e::perform_serialize<true>(blob, ps, hparent_section, "blob");
+  return epee::serialization::perform_serialize<true>(blob, ps, hparent_section, "blob");
 }
 
 
@@ -1011,24 +973,6 @@ KV_SERIALIZE_MAP_CODE_BEGIN(GET_OUTPUT_DISTRIBUTION::response)
   KV_SERIALIZE(untrusted)
 KV_SERIALIZE_MAP_CODE_END()
 
-// KV_SERIALIZE_MAP_CODE_BEGIN(GET_OUTPUT_KEYS::output_amount_and_index)
-//   KV_SERIALIZE(amount)
-//   KV_SERIALIZE(index)
-// KV_SERIALIZE_MAP_CODE_END()
-
-// KV_SERIALIZE_MAP_CODE_BEGIN(GET_OUTPUT_KEYS::request)
-//   KV_SERIALIZE(outputs)
-// KV_SERIALIZE_MAP_CODE_END()
-
-// KV_SERIALIZE_MAP_CODE_BEGIN(GET_OUTPUT_KEYS::output_key_mask_unlocked)
-//   KV_SERIALIZE(key)
-//   KV_SERIALIZE(mask)
-//   KV_SERIALIZE(unlocked)
-// KV_SERIALIZE_MAP_CODE_END()
-
-// KV_SERIALIZE_MAP_CODE_BEGIN(GET_OUTPUT_KEYS::response)
-//   KV_SERIALIZE(keys)
-// KV_SERIALIZE_MAP_CODE_END()
 
 KV_SERIALIZE_MAP_CODE_BEGIN(POP_BLOCKS::request)
   KV_SERIALIZE(nblocks);
@@ -1281,11 +1225,13 @@ KV_SERIALIZE_MAP_CODE_BEGIN(STORAGE_SERVER_PING::request)
   KV_SERIALIZE(version);
   KV_SERIALIZE(https_port);
   KV_SERIALIZE(omq_port);
+  KV_SERIALIZE(pubkey_ed25519);
 KV_SERIALIZE_MAP_CODE_END()
 
 
 KV_SERIALIZE_MAP_CODE_BEGIN(BELNET_PING::request)
   KV_SERIALIZE(version);
+  KV_SERIALIZE(pubkey_ed25519);
 KV_SERIALIZE_MAP_CODE_END()
 
 
@@ -1376,10 +1322,6 @@ KV_SERIALIZE_MAP_CODE_BEGIN(REPORT_PEER_STATUS::request)
 KV_SERIALIZE_MAP_CODE_END()
 
 
-KV_SERIALIZE_MAP_CODE_BEGIN(BNS_NAMES_TO_OWNERS::request_entry)
-  KV_SERIALIZE(name_hash)
-  KV_SERIALIZE(types)
-KV_SERIALIZE_MAP_CODE_END()
 
 
 KV_SERIALIZE_MAP_CODE_BEGIN(BNS_NAMES_TO_OWNERS::request)
@@ -1390,11 +1332,13 @@ KV_SERIALIZE_MAP_CODE_END()
 
 KV_SERIALIZE_MAP_CODE_BEGIN(BNS_NAMES_TO_OWNERS::response_entry)
   KV_SERIALIZE(entry_index)
-  KV_SERIALIZE_ENUM(type)
   KV_SERIALIZE(name_hash)
   KV_SERIALIZE(owner)
   KV_SERIALIZE(backup_owner)
-  KV_SERIALIZE(encrypted_value)
+  KV_SERIALIZE(encrypted_bchat_value)
+  KV_SERIALIZE(encrypted_wallet_value)
+  KV_SERIALIZE(encrypted_belnet_value)
+  KV_SERIALIZE(encrypted_eth_addr_value)
   KV_SERIALIZE(update_height)
   KV_SERIALIZE(expiration_height)
   KV_SERIALIZE(txid)
@@ -1406,6 +1350,24 @@ KV_SERIALIZE_MAP_CODE_BEGIN(BNS_NAMES_TO_OWNERS::response)
   KV_SERIALIZE(status)
 KV_SERIALIZE_MAP_CODE_END()
 
+KV_SERIALIZE_MAP_CODE_BEGIN(BNS_LOOKUP::request)
+  KV_SERIALIZE(name)
+KV_SERIALIZE_MAP_CODE_END()
+
+KV_SERIALIZE_MAP_CODE_BEGIN(BNS_LOOKUP::response)
+  KV_SERIALIZE(name_hash)
+  KV_SERIALIZE(owner)
+  KV_SERIALIZE(backup_owner)
+  KV_SERIALIZE(bchat_value)
+  KV_SERIALIZE(wallet_value)
+  KV_SERIALIZE(belnet_value)
+  KV_SERIALIZE(eth_addr_value)
+  KV_SERIALIZE(update_height)
+  KV_SERIALIZE(expiration_height)
+  KV_SERIALIZE(txid)
+  KV_SERIALIZE(status)
+KV_SERIALIZE_MAP_CODE_END()
+
 KV_SERIALIZE_MAP_CODE_BEGIN(BNS_OWNERS_TO_NAMES::request)
   KV_SERIALIZE(entries)
   KV_SERIALIZE(include_expired)
@@ -1414,14 +1376,16 @@ KV_SERIALIZE_MAP_CODE_END()
 
 KV_SERIALIZE_MAP_CODE_BEGIN(BNS_OWNERS_TO_NAMES::response_entry)
   KV_SERIALIZE(request_index)
-  KV_SERIALIZE_ENUM(type)
   KV_SERIALIZE(name_hash)
   KV_SERIALIZE(owner)
   KV_SERIALIZE(backup_owner)
-  KV_SERIALIZE(encrypted_value)
+  KV_SERIALIZE(encrypted_bchat_value)
+  KV_SERIALIZE(encrypted_wallet_value)
+  KV_SERIALIZE(encrypted_belnet_value)
   KV_SERIALIZE(update_height)
   KV_SERIALIZE(expiration_height)
   KV_SERIALIZE(txid)
+  KV_SERIALIZE(encrypted_eth_addr_value)
 KV_SERIALIZE_MAP_CODE_END()
 
 
@@ -1442,6 +1406,15 @@ KV_SERIALIZE_MAP_CODE_BEGIN(BNS_RESOLVE::response)
   KV_SERIALIZE(nonce)
 KV_SERIALIZE_MAP_CODE_END()
 
+KV_SERIALIZE_MAP_CODE_BEGIN(BNS_VALUE_DECRYPT::request)
+  KV_SERIALIZE(name);
+  KV_SERIALIZE(type);
+  KV_SERIALIZE(encrypted_value);
+KV_SERIALIZE_MAP_CODE_END()
+
+KV_SERIALIZE_MAP_CODE_BEGIN(BNS_VALUE_DECRYPT::response)
+  KV_SERIALIZE(value)
+KV_SERIALIZE_MAP_CODE_END()
 
 KV_SERIALIZE_MAP_CODE_BEGIN(FLUSH_CACHE::request)
   KV_SERIALIZE_OPT(bad_txs, false)

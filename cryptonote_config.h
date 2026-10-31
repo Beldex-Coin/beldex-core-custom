@@ -51,6 +51,30 @@ using namespace std::literals;
 #define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE             10
 #define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE_V17         2
 #define CRYPTONOTE_DEFAULT_TX_MIXIN                     9
+
+// ── Privacy token ring design (HF21+) ─────────────────────────────────
+//
+// Zyphora inputs (spending a tx_out_zyphora) use the SAME amount-0 output
+// pool as native BDX RingCT outputs for decoy selection.  Both BDX RCT outputs
+// (txout_to_key) and privacy token outputs (tx_out_zyphora) store
+// tx_out.amount == 0 on-chain, so they live in the same bucket.
+//
+// Amount balance and token integrity are proven separately:
+//   - Balance:   zy_balance_proof     (double Schnorr over X and G)
+//   - Token:     BGE surjection proof (proves output token is real)
+//   - Range:     BulletproofPlus      (proves amounts in [0, 2^64))
+//
+// Result: no bootstrapping problem -- day-1 token transfers can draw decoys
+// from the existing BDX output pool.
+#define TOKEN_RING_SIZE                                 CRYPTONOTE_DEFAULT_TX_MIXIN // 9, same as BDX
+
+// ── Mandatory fan-out for deploy / mint transactions (HF21+) ───────────────
+//
+// Every register_privacy_token or mint_token transaction MUST produce at least
+// MIN_TOKEN_MINT_OUTPUTS tx_out_zyphora outputs.  Value = mixin + 1 = 10:
+// guarantees a full ring of 9 decoys + 1 real is always achievable using only
+// prior ZY outputs of the same token, independent of the BDX pool.
+#define MIN_TOKEN_MINT_OUTPUTS                          (CRYPTONOTE_DEFAULT_TX_MIXIN + 1) // 10
 #define FINAL_SUBSIDY_PER_MINUTE                        ((uint64_t)500000000) // 3 * pow(10, 7)
 
 #define STAKING_REQUIREMENT_LOCK_BLOCKS_EXCESS          20
@@ -77,6 +101,7 @@ static_assert(STAKING_PORTIONS % 12 == 0, "Use a multiple of twelve, so that it 
 #define FEE_PER_BYTE_V12                                ((uint64_t)17200) // Higher fee (and fallback) in v12 (only, v13 switches back)
 #define FEE_PER_OUTPUT                                  ((uint64_t)20000000) // 0.02 BDX per tx output (in addition to the per-byte fee), starting in v13
 #define FEE_PER_OUTPUT_V17                              ((uint64_t)100000) // 0.0001 BDX per tx output 
+#define FEE_PER_OUTPUT_V21                              ((uint64_t)10000000) // 0.01 BDX per tx output (HF21+)
 #define DYNAMIC_FEE_PER_KB_BASE_BLOCK_REWARD            ((uint64_t)10000000000) // 10 * pow(10,12)
 #define DYNAMIC_FEE_PER_KB_BASE_FEE_V5                  ((uint64_t)400000000)
 #define DYNAMIC_FEE_REFERENCE_TRANSACTION_WEIGHT        ((uint64_t)300000)
@@ -84,9 +109,14 @@ static_assert(STAKING_PORTIONS % 12 == 0, "Use a multiple of twelve, so that it 
 
 #define DIFFICULTY_TARGET_V2                            120  // seconds
 #define DIFFICULTY_TARGET_V1                            60  // seconds - before first fork
-#define DIFFICULTY_TARGET_V17                           30  //SEC
-constexpr auto TARGET_BLOCK_TIME           = 2min;
-constexpr auto TARGET_BLOCK_TIME_V17       = 30s;
+constexpr auto TARGET_BLOCK_TIME_OLD     = 2min;
+constexpr uint64_t BLOCKS_PER_HOUR_OLD   = 1h / TARGET_BLOCK_TIME_OLD;
+constexpr uint64_t BLOCKS_PER_DAY_OLD    = 24h / TARGET_BLOCK_TIME_OLD;
+
+constexpr auto TARGET_BLOCK_TIME     = 30s;
+constexpr uint64_t BLOCKS_PER_HOUR   = 1h / TARGET_BLOCK_TIME;
+constexpr uint64_t BLOCKS_PER_DAY    = 24h / TARGET_BLOCK_TIME;
+
 constexpr uint64_t DIFFICULTY_WINDOW       = 59;
 constexpr uint64_t DIFFICULTY_BLOCKS_COUNT(bool before_hf16)
 {
@@ -110,8 +140,8 @@ constexpr uint64_t DIFFICULTY_BLOCKS_COUNT(bool before_hf16)
 
 
 
-#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2   TARGET_BLOCK_TIME * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
-#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V3   TARGET_BLOCK_TIME_V17 * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
+#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2   TARGET_BLOCK_TIME_OLD * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
+#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V3   TARGET_BLOCK_TIME * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
 #define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS       1
 
 
@@ -187,27 +217,23 @@ constexpr uint64_t DIFFICULTY_BLOCKS_COUNT(bool before_hf16)
 #define HF_VERSION_EFFECTIVE_SHORT_TERM_MEDIAN_IN_PENALTY cryptonote::network_version_17_POS
 #define HF_VERSION_POS                          cryptonote::network_version_17_POS
 #define HF_VERSION_CLSAG                        cryptonote::network_version_15_flash
-#define HF_VERSION_PROOF_BTENC                  cryptonote::network_version_18
+#define HF_VERSION_PROOF_BTENC                  cryptonote::network_version_18_bns
+#define HF_VERSION_BULLETPROOF_PLUS             cryptonote::network_version_20_bulletproof_plus
+#define HF_VERSION_PRIVATE_TOKENS               cryptonote::network_version_22_private_tokens
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        8
 
 #define HASH_OF_HASHES_STEP                     256
 
-#define VOTE_LIFETIME_HOURS                     2
-#define MINIMUM_CREDIT_HOURS                    2
-
 #define DEFAULT_TXPOOL_MAX_WEIGHT               648000000ull // 3 days at 300000, in bytes
 
 #define BULLETPROOF_MAX_OUTPUTS                 16
+#define BULLETPROOF_PLUS_MAX_OUTPUTS            16
 
 #define CRYPTONOTE_PRUNING_STRIPE_SIZE          4096 // the smaller, the smoother the increase
 #define CRYPTONOTE_PRUNING_LOG_STRIPES          3 // the higher, the more space saved
 #define CRYPTONOTE_PRUNING_TIP_BLOCKS           5500 // the smaller, the more space saved
 //#define CRYPTONOTE_PRUNING_DEBUG_SPOOF_SEED
-
-constexpr uint64_t PRE_POS_BLOCKS_EXPECTED_IN_HOURS(int hours) { return (1h / TARGET_BLOCK_TIME) * hours; }
-constexpr uint64_t PRE_POS_BLOCKS_EXPECTED_IN_DAYS(int days)   { return PRE_POS_BLOCKS_EXPECTED_IN_HOURS(24) * days; }
-constexpr uint64_t PRE_POS_BLOCKS_EXPECTED_IN_YEARS(int years) { return PRE_POS_BLOCKS_EXPECTED_IN_DAYS(365) * years; }
 
 // New constants are intended to go here
 namespace config
@@ -227,8 +253,9 @@ namespace config
   // Used to estimate the blockchain height from a timestamp, with some grace time.  This can drift
   // slightly over time (because average block time is not typically *exactly*
   // DIFFICULTY_TARGET_V2).
-  inline constexpr uint64_t HEIGHT_ESTIMATE_HEIGHT = 582088;
-  inline constexpr time_t HEIGHT_ESTIMATE_TIMESTAMP = 1595359932;
+  inline constexpr uint64_t HEIGHT_ESTIMATE_HEIGHT = 742421;
+  inline constexpr uint64_t BNS_VALIDATION_HEIGHT = 2068850;
+  inline constexpr time_t HEIGHT_ESTIMATE_TIMESTAMP = 1639187815;
 
   inline constexpr uint64_t CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX = 0xd1;
   inline constexpr uint64_t CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX = 19;
@@ -243,7 +270,7 @@ namespace config
   inline constexpr std::string_view GENESIS_TX = "013c01ff0005978c390224a302c019c844f7141f35bf7f0fc5b02ada055e4ba897557b17ac6ccf88f0a2c09fab030276d443549feee11fe325048eeea083fcb7535312572d255ede1ecb58f84253b480e89226023b7d7c5e6eff4da699393abf12b6e3d04eae7909ae21932520fb3166b8575bb180cab5ee0102e93beb645ce7d5574d6a5ed5d9b8aadec7368342d08a7ca7b342a428353a10df80e497d01202b6e6844c1e9a478d0e4f7f34e455b26077a51f0005357aa19a49ca16eb373f622101f7c2a3a2ed7011b61998b1cd4f45b4d3c1daaa82908a10ca191342297eef1cf8"sv;
   inline constexpr uint32_t GENESIS_NONCE = 11011;
 
-  inline constexpr uint64_t GOVERNANCE_REWARD_INTERVAL_IN_BLOCKS = PRE_POS_BLOCKS_EXPECTED_IN_DAYS(7);//Governance added from V17
+  inline constexpr uint64_t GOVERNANCE_REWARD_INTERVAL_IN_BLOCKS = 7 * BLOCKS_PER_DAY_OLD;//Governance added from V17
   inline constexpr std::array GOVERNANCE_WALLET_ADDRESS =
   {
     "bxcguQiBhYaDW5wAdPLSwRHA6saX1nCEYUF89SPKZfBY1BENdLQWjti59aEtAEgrVZjnCJEVFoCDrG1DCoz2HeeN2pxhxL9xa"sv, // <V17
@@ -258,6 +285,8 @@ namespace config
   inline constexpr auto REACHABLE_MAX_FAILURE_VALIDITY = 5min; // If we don't hear any SS ping/belnet bchat test failures for more than this long then we start considering the MN as passing for the purpose of obligation testing until we get another test result.  This should be somewhat larger than SS/belnet's max re-test backoff (2min).
   // Hash domain separators
   inline constexpr std::string_view HASH_KEY_BULLETPROOF_EXPONENT = "bulletproof"sv;
+  inline constexpr std::string_view HASH_KEY_BULLETPROOF_PLUS_EXPONENT  = "bulletproof_plus"sv;
+  inline constexpr std::string_view HASH_KEY_BULLETPROOF_PLUS_TRANSCRIPT = "bulletproof_plus_transcript"sv;
   inline constexpr std::string_view HASH_KEY_RINGDB = "ringdsb\0"sv;
   inline constexpr std::string_view HASH_KEY_SUBADDRESS = "SubAddr\0"sv;
   inline constexpr unsigned char HASH_KEY_ENCRYPTED_PAYMENT_ID = 0x8d;
@@ -269,11 +298,18 @@ namespace config
   inline constexpr std::string_view HASH_KEY_CLSAG_ROUND = "CLSAG_round"sv;
   inline constexpr std::string_view HASH_KEY_CLSAG_AGG_0 = "CLSAG_agg_0"sv;
   inline constexpr std::string_view HASH_KEY_CLSAG_AGG_1 = "CLSAG_agg_1"sv;
+  // 3-layer CLSAG-GGX (zyphora ZY_sig): layer 0 = stealth address (G),
+  // layer 1 = amount commitment (G), layer 2 = blinded token id (X).
+  inline constexpr std::string_view HASH_KEY_CLSAG_GGX_ROUND = "CLSAG_GGX_round"sv;
+  inline constexpr std::string_view HASH_KEY_CLSAG_GGX_AGG_0 = "CLSAG_GGX_agg_0"sv;
+  inline constexpr std::string_view HASH_KEY_CLSAG_GGX_AGG_1 = "CLSAG_GGX_agg_1"sv;
+  inline constexpr std::string_view HASH_KEY_CLSAG_GGX_AGG_2 = "CLSAG_GGX_agg_2"sv;
 
   namespace testnet
   {
-    inline constexpr uint64_t HEIGHT_ESTIMATE_HEIGHT = 339767;
-    inline constexpr time_t HEIGHT_ESTIMATE_TIMESTAMP = 1595360006;
+    inline constexpr uint64_t HEIGHT_ESTIMATE_HEIGHT = 169960;
+    inline constexpr uint64_t BNS_VALIDATION_HEIGHT = 1028065;
+    inline constexpr time_t HEIGHT_ESTIMATE_TIMESTAMP = 1668622463;
     inline constexpr uint64_t CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX = 53;
     inline constexpr uint64_t CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX = 54;
     inline constexpr uint64_t CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX = 63;
@@ -301,7 +337,8 @@ namespace config
   namespace devnet
   {
     inline constexpr uint64_t HEIGHT_ESTIMATE_HEIGHT = 0;
-    inline constexpr time_t HEIGHT_ESTIMATE_TIMESTAMP = 1597170000;
+    inline constexpr uint64_t BNS_VALIDATION_HEIGHT = 0;
+    inline constexpr time_t HEIGHT_ESTIMATE_TIMESTAMP = 1668622463;
     inline constexpr uint64_t CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX = 24; // ~ dV1 .. dV3
     inline constexpr uint64_t CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX = 25; // ~ dVA .. dVC
     inline constexpr uint64_t CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX = 36; // ~dVa .. dVc
@@ -315,7 +352,7 @@ namespace config
     inline constexpr std::string_view GENESIS_TX = "023c01ff0001d7c1c4e81402a25ba172ed7bca3b35e0be2f097b743973cf3c26777342032bed1036b19ab7a4420145706ec71eec5d57962c225b0615c172f8429984ec4954ba8b05bdad3f454f0472000000000000000000000000000000000000000000000000000000000000000000"sv;
     inline constexpr uint32_t GENESIS_NONCE = 11013;
 
-    inline constexpr uint64_t GOVERNANCE_REWARD_INTERVAL_IN_BLOCKS = PRE_POS_BLOCKS_EXPECTED_IN_DAYS(7);//governance added from V17
+    inline constexpr uint64_t GOVERNANCE_REWARD_INTERVAL_IN_BLOCKS = 7 * BLOCKS_PER_DAY_OLD;//governance added from V17
     inline constexpr std::array GOVERNANCE_WALLET_ADDRESS =
     {
       "59XZKiAFwAKVyWN1CuuyFqMTTFLu9PEjpb3WhXfVuStgdoCZM1MtyJ2C41qijqfbdnY844F3boaW29geb8pT3mfrV9QQSRB"sv, // hardfork v7-9
@@ -346,9 +383,16 @@ namespace cryptonote
     network_version_13_checkpointing, // Checkpointing, Relaxed Deregistration, RandomXL, Beldex Storage Server
     network_version_14_enforce_checkpoints,
     network_version_15_flash,
-    network_version_16_bns,
+    network_version_16,
     network_version_17_POS,
-    network_version_18,
+    network_version_18_bns,
+    network_version_19,
+    network_version_20_bulletproof_plus,
+    // 21 is bulletproof_plus on this network and already has a scheduled
+    // mainnet activation; privacy tokens are 22. Keeping 21 named for tokens
+    // here would make the client treat an ordinary hf21 chain as token-capable.
+    network_version_21_bulletproof_plus,
+    network_version_22_private_tokens, // Private custom token transfers
 
     network_version_count,
   };
@@ -379,6 +423,7 @@ namespace cryptonote
   {
     network_type NETWORK_TYPE;
     uint64_t HEIGHT_ESTIMATE_HEIGHT;
+    uint64_t BNS_VALIDATION_HEIGHT;
     time_t HEIGHT_ESTIMATE_TIMESTAMP;
     uint64_t CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX;
     uint64_t CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX;
@@ -406,6 +451,7 @@ namespace cryptonote
   inline constexpr network_config mainnet_config{
     MAINNET,
     ::config::HEIGHT_ESTIMATE_HEIGHT,
+    ::config::BNS_VALIDATION_HEIGHT,
     ::config::HEIGHT_ESTIMATE_TIMESTAMP,
     ::config::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
     ::config::CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX,
@@ -428,6 +474,7 @@ namespace cryptonote
   inline constexpr network_config testnet_config{
     TESTNET,
     ::config::testnet::HEIGHT_ESTIMATE_HEIGHT,
+    ::config::testnet::BNS_VALIDATION_HEIGHT,
     ::config::testnet::HEIGHT_ESTIMATE_TIMESTAMP,
     ::config::testnet::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
     ::config::testnet::CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX,
@@ -450,6 +497,7 @@ namespace cryptonote
   inline constexpr network_config devnet_config{
     DEVNET,
     ::config::devnet::HEIGHT_ESTIMATE_HEIGHT,
+    ::config::devnet::BNS_VALIDATION_HEIGHT,
     ::config::devnet::HEIGHT_ESTIMATE_TIMESTAMP,
     ::config::devnet::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
     ::config::devnet::CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX,
@@ -472,6 +520,7 @@ namespace cryptonote
   inline constexpr network_config fakenet_config{
     FAKECHAIN,
     ::config::HEIGHT_ESTIMATE_HEIGHT,
+    ::config::BNS_VALIDATION_HEIGHT,
     ::config::HEIGHT_ESTIMATE_TIMESTAMP,
     ::config::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
     ::config::CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX,
@@ -504,9 +553,3 @@ namespace cryptonote
     }
   }
 }
-
-constexpr uint64_t BLOCKS_EXPECTED_IN_HOURS(int hours, uint8_t hf_version) { return (1h / (hf_version>=cryptonote::network_version_17_POS?TARGET_BLOCK_TIME_V17:TARGET_BLOCK_TIME)) * hours; }
-constexpr uint64_t BLOCKS_EXPECTED_IN_DAYS(int days, uint8_t hf_version)   { return BLOCKS_EXPECTED_IN_HOURS(24,hf_version) * days; }
-constexpr uint64_t BLOCKS_EXPECTED_IN_YEARS(int years, uint8_t hf_version) { return BLOCKS_EXPECTED_IN_DAYS(365,hf_version) * years; }
-
-constexpr uint64_t BLOCKS_PER_CREDIT_EARNED = 30;

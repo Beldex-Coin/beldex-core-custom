@@ -58,47 +58,158 @@ enum struct mapping_type : uint16_t
 {
   bchat = 0,
   wallet = 1,
-  belnet = 2, // the type value stored in the database; counts as 1-year when used in a buy tx.
+  belnet = 2,
   belnet_2years,
   belnet_5years,
   belnet_10years,
+  eth_addr,
   _count,
   update_record_internal,
 };
 
-constexpr bool is_belnet_type(mapping_type t) { return t >= mapping_type::belnet && t <= mapping_type::belnet_10years; }
+enum struct mapping_years : uint16_t
+{
+  bns_1year =0,
+  bns_2years =1,
+  bns_5years =2,
+  bns_10years,
+  _count,
+  update_owner_record,
+  update_record_internal,
+};
+
+constexpr bool is_renewal_type(mapping_years y) { return y >= mapping_years::bns_1year && y <= mapping_years::bns_10years; }
 
 // How many days we add per "year" of BNS belnet registration.  We slightly extend this to the 368
 // days per registration "year" to allow for some blockchain time drift + leap years.
 constexpr uint64_t REGISTRATION_YEAR_DAYS = 368;
 
-constexpr uint64_t burn_needed(uint8_t hf_version, mapping_type type)
+constexpr uint64_t burn_needed(uint8_t hf_version, mapping_years map_years)
 {
   uint64_t result = 0;
 
-  // The base amount for bchat/wallet/belnet-1year:
-  const uint64_t basic_fee = (
-      hf_version >= 16 ? 15*COIN :  // cryptonote::network_version_16_POS -- but don't want to add cryptonote_config.h include
-      20*COIN                       // cryptonote::network_version_15_bns
+  const uint64_t basic_fee = (hf_version >= 18 ? 500 * COIN : // cryptonote::network_version_18_bns -- but don't want to add cryptonote_config.h include
+                                  15 * COIN                  // cryptonote::network_version_17_POS
   );
-  switch (type)
+
+  switch (map_years)
   {
-    case mapping_type::update_record_internal:
+    case mapping_years::update_record_internal:
       result = 0;
       break;
 
-    case mapping_type::belnet: /* FALLTHRU */
-    case mapping_type::bchat: /* FALLTHRU */
-    case mapping_type::wallet: /* FALLTHRU */
-    default:
-      result = basic_fee;
+    case mapping_years::update_owner_record:
+      result = basic_fee * 10/100 ;   // 10% from the basic fee
       break;
 
-    case mapping_type::belnet_2years: result = 2 * basic_fee; break;
-    case mapping_type::belnet_5years: result = 4 * basic_fee; break;
-    case mapping_type::belnet_10years: result = 6 * basic_fee; break;
+    case mapping_years::bns_1year:
+    default:
+      result = basic_fee + (basic_fee * 30/100);  // 30% extra from the basic fee
+      break;
+
+    case mapping_years::bns_2years:
+      result = 2 * basic_fee;
+      break;
+    case mapping_years::bns_5years:
+      result = 4 * basic_fee;
+      break;
+    case mapping_years::bns_10years:
+      result = 8 * basic_fee;
+      break;
   }
+
   return result;
 }
 }; // namespace bns
 
+
+namespace cryptonote { enum class token_descriptor_operation_type : uint8_t; }
+
+namespace tokens
+{
+// A registration costs two things. The registering wallet must create a native
+// output paying itself REGISTRATION_COLLATERAL_AMOUNT, locked for
+// REGISTRATION_COLLATERAL_LOCK_BLOCKS -- returned when the lock expires, so an
+// opportunity cost. And it pays a registration fee outright: part burned, part
+// to the governance wallet through the miner fee. Consensus rejects a
+// registration missing either.
+inline constexpr uint64_t REGISTRATION_COLLATERAL_AMOUNT = 10000 * COIN;
+inline constexpr uint64_t REGISTRATION_COLLATERAL_AMOUNT_TESTNET = 100 * COIN;
+
+// The collateral consensus requires. nettype is the raw cryptonote::network_type,
+// as in fee_for_operation. Only testnet locks less; unlike the fees, devnet keeps
+// the mainnet figure.
+constexpr uint64_t registration_collateral_amount(uint8_t nettype)
+{
+  return nettype == 1 /* TESTNET */ ? REGISTRATION_COLLATERAL_AMOUNT_TESTNET
+                                    : REGISTRATION_COLLATERAL_AMOUNT;
+}
+inline constexpr uint64_t REGISTRATION_COLLATERAL_LOCK_BLOCKS = 2880 * 30 * 6;
+inline constexpr uint64_t REGISTRATION_COLLATERAL_LOCK_TOLERANCE_BLOCKS = 60;
+
+// Token operation surcharges, on top of the ordinary network fee. Mainnet and
+// testnet differ; fee_for_operation() picks the pair consensus checks.
+inline constexpr uint64_t REGISTRATION_FEE_BURN_AMOUNT       = 500 * COIN;
+inline constexpr uint64_t REGISTRATION_FEE_GOVERNANCE_AMOUNT = 500 * COIN;
+inline constexpr uint64_t REGISTRATION_FEE_AMOUNT =
+    REGISTRATION_FEE_BURN_AMOUNT + REGISTRATION_FEE_GOVERNANCE_AMOUNT;
+inline constexpr uint64_t MINT_FEE_BURN_AMOUNT   = 50 * COIN;
+inline constexpr uint64_t UPDATE_FEE_BURN_AMOUNT = 10 * COIN;
+inline constexpr uint64_t BURN_FEE_BURN_AMOUNT   = 0;
+
+inline constexpr uint64_t REGISTRATION_FEE_BURN_AMOUNT_TESTNET       = 50 * COIN;
+inline constexpr uint64_t REGISTRATION_FEE_GOVERNANCE_AMOUNT_TESTNET = 50 * COIN;
+inline constexpr uint64_t REGISTRATION_FEE_AMOUNT_TESTNET =
+    REGISTRATION_FEE_BURN_AMOUNT_TESTNET + REGISTRATION_FEE_GOVERNANCE_AMOUNT_TESTNET;
+inline constexpr uint64_t MINT_FEE_BURN_AMOUNT_TESTNET   = 5 * COIN;
+inline constexpr uint64_t UPDATE_FEE_BURN_AMOUNT_TESTNET = 1 * COIN;
+inline constexpr uint64_t BURN_FEE_BURN_AMOUNT_TESTNET   = 0;
+
+struct operation_fee
+{
+  uint64_t burn_amount = 0;
+  uint64_t governance_amount = 0;
+  bool exact_burn = false;
+  bool enabled = false;
+
+  // txnFee includes both the declared burn and the governance carve-out.
+  // Subtract only after checking burn <= txnFee to avoid unsigned underflow.
+  constexpr bool paid(uint64_t burned, uint64_t txn_fee) const
+  {
+    return enabled && burned <= txn_fee &&
+        (exact_burn ? burned == burn_amount : burned >= burn_amount) &&
+        txn_fee - burned >= governance_amount;
+  }
+};
+
+// What consensus requires a token operation to burn and to leave for
+// governance. hf_version and nettype are the raw values of
+// cryptonote::network_version_* and cryptonote::network_type, compared
+// numerically -- like bns::burn_needed -- so this header does not need
+// cryptonote_config.h. Mainnet (and fakechain): 1000 BDX registration;
+// testnet and devnet: 100 BDX.
+constexpr operation_fee fee_for_operation(uint8_t hf_version,
+                                          cryptonote::token_descriptor_operation_type op_type,
+                                          uint8_t nettype)
+{
+  if (hf_version < 22) // cryptonote::network_version_22_private_tokens
+    return {};
+
+  const bool testnet = nettype == 1 /* TESTNET */ || nettype == 2 /* DEVNET */;
+  switch (static_cast<uint8_t>(op_type))
+  {
+    case 1: // register_token
+      return testnet
+          ? operation_fee{REGISTRATION_FEE_BURN_AMOUNT_TESTNET, REGISTRATION_FEE_GOVERNANCE_AMOUNT_TESTNET, true, true}
+          : operation_fee{REGISTRATION_FEE_BURN_AMOUNT, REGISTRATION_FEE_GOVERNANCE_AMOUNT, true, true};
+    case 2: // mint_token
+      return {testnet ? MINT_FEE_BURN_AMOUNT_TESTNET : MINT_FEE_BURN_AMOUNT, 0, false, true};
+    case 3: // update_token
+      return {testnet ? UPDATE_FEE_BURN_AMOUNT_TESTNET : UPDATE_FEE_BURN_AMOUNT, 0, false, true};
+    case 4: // burn_token
+      return {testnet ? BURN_FEE_BURN_AMOUNT_TESTNET : BURN_FEE_BURN_AMOUNT, 0, false, true};
+    default:
+      return {}; // an unknown operation never gets an enabled zero-fee policy
+  }
+}
+}; // namespace tokens

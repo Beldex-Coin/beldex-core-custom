@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2020, The Monero Project
+// Copyright (c) 2017-2022, The Monero Project
 // 
 // All rights reserved.
 // 
@@ -28,40 +28,22 @@
 
 #pragma once
 
-#include <boost/optional/optional.hpp>
-#include <cstdint>
-#include <string>
-#include <vector>
-#include "epee/byte_slice.h"
-#include "crypto/hash.h"
+#ifndef BULLETPROOFS_PLUS_H
+#define BULLETPROOFS_PLUS_H
 
-namespace cryptonote
-{
-class core;
+#include "rctTypes.h"
 
-namespace rpc
+namespace rct
 {
 
-struct output_distribution_data_rpc
-{
-  std::vector<std::uint64_t> distribution;
-  std::uint64_t start_height;
-  std::uint64_t base;
-};
+BulletproofPlus bulletproof_plus_PROVE(const rct::key &v, const rct::key &gamma);
+BulletproofPlus bulletproof_plus_PROVE(uint64_t v, const rct::key &gamma);
+BulletproofPlus bulletproof_plus_PROVE(const rct::keyV &v, const rct::keyV &gamma);
+BulletproofPlus bulletproof_plus_PROVE(const std::vector<uint64_t> &v, const rct::keyV &gamma);
+bool bulletproof_plus_VERIFY(const BulletproofPlus &proof);
+bool bulletproof_plus_VERIFY(const std::vector<const BulletproofPlus*> &proofs);
+bool bulletproof_plus_VERIFY(const std::vector<BulletproofPlus> &proofs);
 
-class RpcHandler
-{
-  public:
-    RpcHandler() { }
-    virtual ~RpcHandler() { }
+}
 
-    virtual epee::byte_slice handle(std::string&& request) = 0;
-
-    static boost::optional<output_distribution_data_rpc>
-      get_output_distribution(const std::function<bool(uint64_t, uint64_t, uint64_t, uint64_t&, std::vector<uint64_t>&, uint64_t&)> &f, uint64_t amount, uint64_t from_height, uint64_t to_height, const std::function<crypto::hash(uint64_t)> &get_hash, bool cumulative, uint64_t blockchain_height);
-};
-
-
-}  // rpc
-
-}  // cryptonote
+#endif

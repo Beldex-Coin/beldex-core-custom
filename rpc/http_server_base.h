@@ -40,7 +40,7 @@ namespace cryptonote::rpc {
         HttpResponse& res,
         int code,
         std::string message,
-        std::optional<epee::serialization_e::storage_entry> = std::nullopt) const;
+        std::optional<epee::serialization::storage_entry> = std::nullopt) const;
 
     // Posts a callback to the uWebSockets thread loop controlling this connection; all writes must
     // be done from that thread, and so this method is provided to defer a callback from another

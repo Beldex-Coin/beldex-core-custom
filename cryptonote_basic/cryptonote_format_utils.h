@@ -169,6 +169,33 @@ namespace cryptonote
   bool get_encrypted_payment_id_from_tx_extra_nonce(const blobdata& extra_nonce, crypto::hash8& payment_id);
   bool add_burned_amount_to_tx_extra(std::vector<uint8_t>& tx_extra, uint64_t burn);
   uint64_t get_burned_amount_from_tx_extra(const std::vector<uint8_t>& tx_extra);
+  bool get_collateral_lock_from_tx_extra(const std::vector<uint8_t>& tx_extra, tx_extra_collateral_lock& lock);
+  bool add_collateral_lock_to_tx_extra(std::vector<uint8_t>& tx_extra, const tx_extra_collateral_lock& lock);
+  bool add_token_descriptor_operation_to_tx_extra(std::vector<uint8_t>& tx_extra, const tx_extra_token_descriptor_operation& op);
+  bool get_token_descriptor_operation_from_tx_extra(const std::vector<uint8_t>& tx_extra, tx_extra_token_descriptor_operation& op, size_t skip = 0);
+  bool is_out_to_acc(const account_keys& acc, const txout_to_key& out_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_public_keys, size_t output_index);
+  // Overload for privacy token outputs (HF21+): checks stealth_address match.
+  bool is_out_to_acc(const account_keys& acc, const tx_out_zyphora& zout, const crypto::public_key& tx_pub_key, size_t output_index);
+
+  // HF21: domain-separated scalar derivation for zyphora output fields.
+  // domain: "token_blind" -> token ID blinding scalar r (T = token_id + r*X)
+  //         "amount_mask" -> Pedersen mask (C = amount*T + mask*G, T = blinded_token_id)
+  //         "enc_amount"  -> amount encryption key
+  rct::key zyphora_derivation_to_scalar(const crypto::key_derivation& derivation,
+                                         size_t output_index,
+                                         const char* domain);
+
+  // HF21: decode a tx_out_zyphora received by acc.
+  // On success fills: amount, token_id, amount_mask, token_blinding_mask.
+  bool decode_zyphora_output(const account_keys& acc,
+                              const tx_out_zyphora& zout,
+                              const crypto::key_derivation& derivation,
+                              size_t output_index,
+                              uint64_t& amount_out,
+                              crypto::token_id& token_id_out,
+                              rct::key& amount_mask_out,
+                              rct::key& token_blinding_mask_out);
+  uint64_t get_burned_amount_from_tx_extra(const std::vector<uint8_t>& tx_extra);
   bool is_out_to_acc(const account_keys& acc, const txout_to_key& out_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_public_keys, size_t output_index);
   struct subaddress_receive_info
   {
@@ -221,6 +248,8 @@ namespace cryptonote
   std::vector<uint64_t> absolute_output_offsets_to_relative(const std::vector<uint64_t>& off);
   std::string get_unit(unsigned int decimal_point = -1);
   std::string print_money(uint64_t amount, unsigned int decimal_point = -1);
+  std::string print_token_amount(uint64_t amount, uint8_t decimal_point, bool strip_zeros = true);
+  bool parse_token_amount(uint64_t& amount, std::string_view str_amount, uint8_t decimal_point);
 
   std::string print_tx_verification_context  (tx_verification_context const &tvc, transaction const *tx = nullptr);
   std::string print_vote_verification_context(vote_verification_context const &vvc, master_nodes::quorum_vote_t const *vote = nullptr);
@@ -310,7 +339,6 @@ namespace cryptonote
   void get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes, crypto::hash& h);
   crypto::hash get_tx_tree_hash(const std::vector<crypto::hash>& tx_hashes);
   crypto::hash get_tx_tree_hash(const block& b);
-  void get_hash_stats(uint64_t &tx_hashes_calculated, uint64_t &tx_hashes_cached, uint64_t &block_hashes_calculated, uint64_t & block_hashes_cached);
 
   crypto::secret_key encrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase);
   crypto::secret_key decrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase);

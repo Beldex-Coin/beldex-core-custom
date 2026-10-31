@@ -165,14 +165,14 @@ public:
     epee::json_rpc::request<const typename RPC::request&> jsonrpc_req{"2.0", std::string{method}, json_rpc_id++, req};
 
     std::string req_serialized;
-    if(!epee::serialization_e::store_t_to_json(jsonrpc_req, req_serialized))
+    if(!epee::serialization::store_t_to_json(jsonrpc_req, req_serialized))
       throw http_client_serialization_error{"Failed to serialize " + tools::type_name(typeid(typename RPC::request))
         + " for json_rpc request for " + std::string{method}};
 
     cpr::Response res = post("json_rpc", std::move(req_serialized), {{"Content-Type", "application/json; charset=utf-8"}});
 
     epee::json_rpc::response_with_error<typename RPC::response> resp{};
-    if (!epee::serialization_e::load_t_from_json(resp, res.text))
+    if (!epee::serialization::load_t_from_json(resp, res.text))
       throw http_client_serialization_error{"Failed to deserialize response for json_rpc request for " + std::string{method}};
 
     if(resp.error.code || resp.error.message.size())
@@ -202,14 +202,14 @@ public:
   {
     std::string target{target_};
     std::string req_serialized;
-    if(!epee::serialization_e::store_t_to_binary(req, req_serialized))
+    if(!epee::serialization::store_t_to_binary(req, req_serialized))
       throw http_client_serialization_error{"Failed to serialize " + tools::type_name(typeid(typename RPC::request))
         + " for binary request /" + target};
 
     cpr::Response res = post(target, std::move(req_serialized), {{"Content-Type", "application/octet-stream"}});
 
     typename RPC::response result;
-    if (!epee::serialization_e::load_t_from_binary(result, res.text))
+    if (!epee::serialization::load_t_from_binary(result, res.text))
       throw http_client_serialization_error{"Failed to deserialize response for binary request for /" + target};
 
     return result;
@@ -239,14 +239,14 @@ public:
   {
     std::string target{target_};
     std::string req_serialized;
-    if(!epee::serialization_e::store_t_to_json(req, req_serialized))
+    if(!epee::serialization::store_t_to_json(req, req_serialized))
       throw http_client_serialization_error{"Failed to serialize " + tools::type_name(typeid(typename RPC::request))
         + " for json request /" + target};
 
     cpr::Response res = post(target, std::move(req_serialized), {{"Content-Type", "application/json; charset=utf-8"}});
 
     typename RPC::response result;
-    if (!epee::serialization_e::load_t_from_json(result, res.text))
+    if (!epee::serialization::load_t_from_json(result, res.text))
       throw http_client_serialization_error{"Failed to deserialize response for json request for /" + target};
 
     return result;

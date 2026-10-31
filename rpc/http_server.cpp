@@ -2,9 +2,9 @@
 #include "http_server.h"
 #include <chrono>
 #include <exception>
-#include <oxenmq/base64.h>
+#include <oxenc/base64.h>
 #include <boost/endian/conversion.hpp>
-#include <oxenmq/variant.h>
+#include <oxenc/variant.h>
 #include "common/command_line.h"
 #include "common/string_util.h"
 #include "cryptonote_config.h"
@@ -366,7 +366,7 @@ namespace cryptonote::rpc {
     res.status = STATUS_OK;
 
     std::string response;
-    epee::serialization_e::store_t_to_binary(res, response);
+    epee::serialization::store_t_to_binary(res, response);
     return response;
   }
 
@@ -392,7 +392,7 @@ namespace cryptonote::rpc {
 
     //if (body.length()>0)
    // {
-          if (!epee::serialization_e::load_t_from_binary(req, body))
+          if (!epee::serialization::load_t_from_binary(req, body))
               throw parse_error{"Failed to parse binary data parameterZ"};
    // }
    // else {
@@ -466,7 +466,7 @@ namespace cryptonote::rpc {
     {
       GET_TRANSACTION_POOL_HASHES_BIN::response res{};
       res.status = STATUS_TX_LONG_POLL_TIMED_OUT;
-      epee::serialization_e::store_t_to_binary(res, long_poll_timeout_body);
+      epee::serialization::store_t_to_binary(res, long_poll_timeout_body);
     }
 
     int count = 0;
@@ -547,7 +547,7 @@ namespace cryptonote::rpc {
       if(!ps.load_from_json(body))
         return data->jsonrpc_error_response(data->res, -32700, "Parse error");
 
-      epee::serialization_e::storage_entry id{std::string{}};
+      epee::serialization::storage_entry id{std::string{}};
       ps.get_value("id", id, nullptr);
 
       std::string method;
@@ -575,7 +575,7 @@ namespace cryptonote::rpc {
 
       {
         std::ostringstream o;
-        epee::serialization_e::dump_as_json(o, id, 0 /*indent*/, false /*newlines*/);
+        epee::serialization::dump_as_json(o, id, 0 /*indent*/, false /*newlines*/);
         data->jsonrpc_id = o.str();
       }
 

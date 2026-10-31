@@ -46,9 +46,9 @@
 
 namespace master_nodes
 {
-  std::optional<std::vector<std::string_view>> master_node_test_results::why(bool v12) const
+  std::optional<std::vector<std::string_view>> master_node_test_results::why() const
   {
-    if (passed(v12))
+    if (passed())
       return std::nullopt;
 
     std::vector<std::string_view> results{{"Master Node is currently failing the following tests:"sv}};
@@ -60,6 +60,7 @@ namespace master_nodes
     if (!timesync_status) results.push_back("Too many missed timesync replies."sv);
     if (!storage_server_reachable) results.push_back("Storage server is not reachable."sv);
     if (!belnet_reachable) results.push_back("Belnet router is not reachable."sv);
+    if (!multi_mn_accept_range) results.push_back("This Master Node IP Reached Maximum acceptable Range."sv);
     return results;
   }
 
@@ -76,7 +77,7 @@ namespace master_nodes
 
   // Perform master node tests -- this returns true if the server node is in a good state, that is,
   // has submitted uptime proofs, participated in required quorums, etc.
-  master_node_test_results quorum_cop::check_master_node(uint8_t hf_version, const crypto::public_key &pubkey, const master_node_info &info) const
+  master_node_test_results quorum_cop::check_master_node(std::map<uint32_t, std::vector<std::pair<crypto::public_key, uint64_t>>> multi_mns_list, uint8_t hf_version, const crypto::public_key &pubkey, const master_node_info &info) const
   {
     const auto& netconf = m_core.get_net_config();
 
@@ -90,7 +91,7 @@ namespace master_nodes
     master_nodes::participation_history<master_nodes::timestamp_participation_entry> timestamp_participation{};
     master_nodes::participation_history<master_nodes::timesync_entry> timesync_status{};
 
-    constexpr std::array<uint16_t, 3> MIN_TIMESTAMP_VERSION{9,1,0};
+    constexpr std::array<uint16_t, 3> MIN_TIMESTAMP_VERSION{5,0,0};
 
     const auto unreachable_threshold = netconf.UPTIME_PROOF_VALIDITY - netconf.UPTIME_PROOF_FREQUENCY;
 
@@ -106,6 +107,33 @@ namespace master_nodes
       timesync_status          = proof.timesync_status;
 
     });
+
+    if (hf_version >= cryptonote::network_version_19) {
+
+      std::vector<std::pair<crypto::public_key, uint64_t>> multi_mns = multi_mns_list[ips[0].first];
+
+      // Sort the list
+      std::sort(multi_mns.begin(), multi_mns.end(), [](const auto &a, const auto &b){
+        return a.second < b.second;
+      });
+
+      // Find the position of pubkey in the vector
+      auto position = std::find_if(multi_mns.begin(), multi_mns.end(), [&](const auto &pair){
+        return pair.first == pubkey;
+      });
+
+      // Check if "pubkey" is found in the multi_mns list
+      if (position != multi_mns.end()) {
+        auto index_in_multi_mns = std::distance(multi_mns.begin(), position);
+
+        // Ensure the index is within allowed limits
+        if (index_in_multi_mns >= MAX_ALLOWED_MASTERNODES_PER_IP) {
+          LOG_PRINT_L1("This Master Node reached the maximum multinode: " << pubkey);
+          result.multi_mn_accept_range = false;
+        }
+      }
+    }
+
     std::chrono::seconds time_since_last_uptime_proof{std::time(nullptr) - timestamp};
 
     bool check_uptime_obligation     = true;
@@ -135,7 +163,7 @@ namespace master_nodes
             result.storage_server_reachable = false;
         }
         // TODO: perhaps come back and make this activate on some "soft fork" height before HF19?
-        if (!belnet_reachable && hf_version >= cryptonote::network_version_18) {
+        if (!belnet_reachable && hf_version >= cryptonote::network_version_18_bns) {
             LOG_PRINT_L1("Master Node belnet is not reachable for node: " << pubkey);
             result.belnet_reachable = false;
         }
@@ -230,7 +258,7 @@ namespace master_nodes
     return result;
   }
 
-  void quorum_cop::handling_master_nodes_states(uint8_t const obligations_height_hf_version_,uint8_t const hf_version,std::shared_ptr<const master_nodes::quorum> quorum,int index_in_group,uint64_t const latest_height)
+  void quorum_cop::handling_master_nodes_states(std::map<uint32_t, std::vector<std::pair<crypto::public_key, uint64_t>>> multi_mns_list, uint8_t const obligations_height_hf_version_,uint8_t const hf_version,std::shared_ptr<const master_nodes::quorum> quorum,int index_in_group,uint64_t const latest_height)
   {
       //
       // NOTE: I am in the quorum
@@ -259,8 +287,8 @@ namespace master_nodes
         continue;
       }
 
-      auto test_results = check_master_node(obligations_height_hf_version_, node_key, info);  //MN proof Testing
-      bool passed       = test_results.passed(hf_version==cryptonote::network_version_12_security_signature);
+      auto test_results = check_master_node(multi_mns_list, obligations_height_hf_version_, node_key, info);  //MN proof Testing
+      bool passed       = test_results.passed();
       LOG_PRINT_L3("process_quorums: check_master_node passed:");//TODO:VOTE
       LOG_PRINT_L3("NODE KEY:" << quorum->workers[node_index]);
     
@@ -294,6 +322,7 @@ namespace master_nodes
         if (!test_results.POS_participation) reason |= cryptonote::Decommission_Reason::missed_POS_participations;
         if (!test_results.storage_server_reachable) reason |= cryptonote::Decommission_Reason::storage_server_unreachable;
         if (!test_results.belnet_reachable) reason |= cryptonote::Decommission_Reason::belnet_unreachable;
+        if (!test_results.multi_mn_accept_range) reason |= cryptonote::Decommission_Reason::multi_mn_accept_range_not_met;
         if (!test_results.timestamp_participation) reason |= cryptonote::Decommission_Reason::timestamp_response_unreachable;
         if (!test_results.timesync_status) reason |= cryptonote::Decommission_Reason::timesync_status_out_of_sync;
       
@@ -309,8 +338,7 @@ namespace master_nodes
           LOG_PRINT_L3("Decommissioned master node " << quorum->workers[node_index] << " has no remaining credit; voting to deregister");
           vote_for_state = new_state::deregister; // Credit ran out!
         } else {
-          int64_t decommission_minimum    = BLOCKS_EXPECTED_IN_HOURS(2,hf_version);
-          if (credit >= decommission_minimum) {
+          if (credit >= DECOMMISSION_MINIMUM) {
             vote_for_state = new_state::decommission;
             LOG_PRINT_L3("Master node "
                          << quorum->workers[node_index]
@@ -320,7 +348,7 @@ namespace master_nodes
             LOG_PRINT_L3("Master node "
                          << quorum->workers[node_index]
                          << " has stopped passing required checks, but does not have sufficient earned credit ("
-                         << credit << " blocks, " << decommission_minimum
+                         << credit << " blocks, " << DECOMMISSION_MINIMUM
                          << " required) to decommission; voting to deregister");
           }
         }
@@ -331,11 +359,12 @@ namespace master_nodes
       if (!handle_vote(vote, vvc,hf_version))
         LOG_ERROR("Failed to add state change vote; reason: " << print_vote_verification_context(vvc, &vote));
     }
+
     if (good > 0)
       LOG_PRINT_L3(good << " of " << total << " master nodes are active and passing checks; no state change votes required");
   }
 
-  void quorum_cop::handling_my_master_node_states(uint8_t const obligations_height_hf_version,uint8_t const hf_version,bool &tested_myself_once_per_block,std::chrono::seconds live_time)
+  void quorum_cop::handling_my_master_node_states(std::map<uint32_t, std::vector<std::pair<crypto::public_key, uint64_t>>> multi_mns_list, uint8_t const obligations_height_hf_version,uint8_t const hf_version,bool &tested_myself_once_per_block,std::chrono::seconds live_time)
   {
     const auto& my_keys = m_core.get_master_keys();
     const auto states_array = m_core.get_master_node_list_state({my_keys.pub});
@@ -345,9 +374,9 @@ namespace master_nodes
       if (info.can_be_voted_on(m_obligations_height))
       {
         tested_myself_once_per_block = true;
-        auto my_test_results = check_master_node(obligations_height_hf_version, my_keys.pub, info);
+        auto my_test_results = check_master_node(multi_mns_list, obligations_height_hf_version, my_keys.pub, info);
         const bool print_failings = info.is_decommissioned() ||
-          (info.is_active() && !my_test_results.passed(hf_version==cryptonote::network_version_12_security_signature) &&
+          (info.is_active() && !my_test_results.passed() &&
             // Don't warn uptime proofs if the daemon is just recently started and is candidate for testing (i.e. restarting the daemon)
             (my_test_results.uptime_proved || live_time >= 1h));
       
@@ -358,11 +387,11 @@ namespace master_nodes
                 ? "Master Node (yours) is currently decommissioned and being tested in quorum: "
                 : "Master Node (yours) is active but is not passing tests for quorum: ")
               << m_obligations_height);
-          if (auto why = my_test_results.why(hf_version==cryptonote::network_version_12_security_signature))
+          if (auto why = my_test_results.why())
             LOG_PRINT_L0(tools::join("\n", *why));
           else
             LOG_PRINT_L0("Master Node is passing all local tests");
-          LOG_PRINT_L0("(Note that some tests, such as storage server and belnet reachability, can only assessed by remote master nodes)");
+          LOG_PRINT_L0("(Note that some tests, such as storage server, belnet reachability and multi_mn_accept_range, can only assessed by remote master nodes)");
         }
       }else{
           LOG_PRINT_L0("process_quorums: Cant be voted on my Master Node");
@@ -421,6 +450,16 @@ namespace master_nodes
     if (hf_version < cryptonote::network_version_9_master_nodes)
       return;
 
+    auto mn_infos = m_core.get_master_node_list_state();
+    std::map<uint32_t, std::vector<std::pair<crypto::public_key, uint64_t>>> multi_mns_list;
+    // Find the MultiMaster nodes
+    for (auto &mn_info : mn_infos)
+    {
+      m_core.get_master_node_list().access_proof(mn_info.pubkey, [&](const proof_info &proof) {
+        auto& entry = multi_mns_list[proof.proof->public_ip];
+        entry.push_back({mn_info.pubkey, mn_info.info->registration_height});
+      });
+    }
     const auto& netconf = m_core.get_net_config();
 
     uint64_t const REORG_SAFETY_BUFFER_BLOCKS = (hf_version >= cryptonote::network_version_13_checkpointing)
@@ -431,7 +470,6 @@ namespace master_nodes
 
     uint64_t const height        = cryptonote::get_block_height(block);
     uint64_t const latest_height = std::max(m_core.get_current_blockchain_height(), m_core.get_target_blockchain_height());
-    uint64_t VOTE_LIFETIME                           = BLOCKS_EXPECTED_IN_HOURS(VOTE_LIFETIME_HOURS,hf_version);
     if (latest_height < VOTE_LIFETIME)
       return;
 
@@ -521,7 +559,7 @@ namespace master_nodes
             int index_in_group = voting_enabled ? find_index_in_quorum_group(quorum->validators, my_keys.pub) : -1;
             if (index_in_group >= 0)
             {
-              handling_master_nodes_states(obligations_height_hf_version,hf_version,quorum,index_in_group,latest_height);
+              handling_master_nodes_states(multi_mns_list,obligations_height_hf_version,hf_version,quorum,index_in_group,latest_height);
             }
             else if (!tested_myself_once_per_block && (find_index_in_quorum_group(quorum->workers, my_keys.pub) >= 0))
             {
@@ -529,7 +567,7 @@ namespace master_nodes
               // being tested. If so, check if we would be decommissioned
               // based on _our_ data and if so, report it to the user so they
               // know about it.
-              handling_my_master_node_states(obligations_height_hf_version,hf_version,tested_myself_once_per_block,live_time);
+              handling_my_master_node_states(multi_mns_list,obligations_height_hf_version,hf_version,tested_myself_once_per_block,live_time);
             }
           }
         }
@@ -551,18 +589,13 @@ namespace master_nodes
     }
   }
 
-  bool quorum_cop::block_added(const cryptonote::block& block, const std::vector<cryptonote::transaction>& txs, cryptonote::checkpoint_t const * /*checkpoint*/)
+  void quorum_cop::block_add(const cryptonote::block& block, const std::vector<cryptonote::transaction>& txs)
   {
     process_quorums(block);
     uint64_t const height = cryptonote::get_block_height(block) + 1; // chain height = new top block height + 1
     m_vote_pool.remove_expired_votes(height,block.major_version);
     m_vote_pool.remove_used_votes(txs, block.major_version);
 
-    // These feels out of place here because the hook system sucks: TODO replace it with
-    // std::function hooks instead.
-    m_core.update_omq_mns();
-
-    return true;
   }
 
   static bool handle_obligations_vote(cryptonote::core &core, const quorum_vote_t& vote, const std::vector<pool_vote_entry>& votes, const quorum& quorum)
@@ -721,7 +754,7 @@ namespace master_nodes
         checkpoint.signatures.push_back(quorum_signature(pool_vote.vote.index_in_group, pool_vote.vote.signature));
     }
 
-    if (update_checkpoint)
+    if (update_checkpoint && (checkpoint.height != 3126052))
       blockchain.update_checkpoint(checkpoint);
 
     return true;
@@ -792,15 +825,12 @@ namespace master_nodes
     // Now we calculate the credit at last commission plus any credit earned from being up for `blocks_up` blocks since
     int64_t credit = info.recommission_credit;
 
-
     if (blocks_up > 0) {
-        credit += blocks_up / BLOCKS_PER_CREDIT_EARNED;
+      credit += blocks_up * DECOMMISSION_CREDIT_PER_DAY / BLOCKS_PER_DAY;
     }
 
-
-    int64_t decommission_max_credit   = BLOCKS_EXPECTED_IN_HOURS(48,hf_version);
-    if (credit > decommission_max_credit)
-      credit = decommission_max_credit; // Cap the available decommission credit blocks if above the max
+    if (credit > DECOMMISSION_MAX_CREDIT)
+      credit = DECOMMISSION_MAX_CREDIT; // Cap the available decommission credit blocks if above the max
 
     // If currently decommissioned, remove any used credits used for the current downtime
     if (info.is_decommissioned())

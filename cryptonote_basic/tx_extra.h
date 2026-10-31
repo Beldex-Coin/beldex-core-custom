@@ -63,7 +63,9 @@ constexpr uint8_t
   TX_EXTRA_TAG_MASTER_NODE_STATE_CHANGE  = 0x78,
   TX_EXTRA_TAG_BURN                       = 0x79,
   TX_EXTRA_TAG_BELDEX_NAME_SYSTEM           = 0x7A,
+  TX_EXTRA_TAG_TOKEN_DESCRIPTOR_OPERATION = 0x7B,
   TX_EXTRA_TAG_SECURITY_SIGNATURE          = 0x88,
+  TX_EXTRA_TAG_COLLATERAL_LOCK            = 0x89,
   TX_EXTRA_MYSTERIOUS_MINERGATE_TAG       = 0xDE;
 
 constexpr char
@@ -80,11 +82,15 @@ enum struct extra_field : uint8_t
   owner           = 1 << 0,
   backup_owner    = 1 << 1,
   signature       = 1 << 2,
-  encrypted_value = 1 << 3,
+  encrypted_bchat_value = 1 << 3,
+  encrypted_wallet_value = 1 << 4,
+  encrypted_belnet_value = 1 << 5,
+  encrypted_eth_addr_value = 1 << 6,
 
   // Bit Masks
-  updatable_fields = (extra_field::owner | extra_field::backup_owner | extra_field::encrypted_value),
-  buy_no_backup    = (extra_field::owner | extra_field::encrypted_value),
+  updatable_fields = (extra_field::owner | extra_field::backup_owner | extra_field::encrypted_bchat_value | extra_field::encrypted_wallet_value | extra_field::encrypted_belnet_value | extra_field::encrypted_eth_addr_value),
+  buy_no_backup    = (extra_field::owner),
+  buy_any_value    = (extra_field::encrypted_bchat_value | extra_field::encrypted_wallet_value | extra_field::encrypted_belnet_value | extra_field::encrypted_eth_addr_value),
   buy              = (extra_field::buy_no_backup | extra_field::backup_owner),
   all              = (extra_field::updatable_fields | extra_field::signature),
 };
@@ -326,6 +332,13 @@ namespace cryptonote
       FIELD(m_portions)
       FIELD(m_expiration_timestamp)
       FIELD(m_master_node_signature)
+      if (Archive::is_deserializer)
+      {
+        if (m_public_spend_keys.size() != m_public_view_keys.size())
+          throw std::invalid_argument{"tx_extra_master_node_register: spend/view key count mismatch"};
+        if (m_public_spend_keys.size() != m_portions.size())
+          throw std::invalid_argument{"tx_extra_master_node_register: spend/portions count mismatch"};
+      }
     END_SERIALIZE()
   };
 
@@ -432,6 +445,7 @@ namespace cryptonote
     timestamp_response_unreachable = 1 << 4,
     timesync_status_out_of_sync = 1 << 5,
     belnet_unreachable = 1 << 6,
+    multi_mn_accept_range_not_met = 1 << 7,
   };
 
   // Returns human-readable reason strings (e.g. "Missed Uptime Proofs") for the given reason bits
@@ -540,17 +554,117 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
+  // Opens the collateral output's amount commitment to consensus.
+  //
+  // Output amounts are hidden inside Pedersen commitments (amount*H + mask*G),
+  // so a validator cannot otherwise tell a 10,000 BDX collateral lock apart from
+  // a 1 atomic unit one. Publishing the amount together with that output's
+  // blinding mask lets the validator recompute the commitment and compare it
+  // against the one on chain, which a false amount cannot match. Only this one
+  // output is revealed: the mask is a hash of that output's own shared secret,
+  // so it discloses neither the tx secret key nor any other output.
+  struct tx_extra_collateral_lock
+  {
+    uint64_t amount;       // Declared collateral amount (must meet the network registration collateral minimum)
+    rct::key mask;         // Blinding factor of that output's amount commitment
+    uint8_t  output_index; // Index into tx.vout[] of the collateral output
+
+    BEGIN_SERIALIZE()
+      FIELD(amount)
+      FIELD(mask)
+      FIELD(output_index)
+    END_SERIALIZE()
+  };
+
+  // Initial protocol-layer scaffold for Zano-style custom tokens.
+  // This introduces the wire representation in tx.extra; construction and
+  // consensus rules will be added in follow-up changes.
+  struct token_descriptor_base
+  {
+    uint8_t version = 1;
+    uint64_t total_max_supply = 0;
+    uint64_t current_supply = 0;
+    uint8_t decimal_point = 0;
+    std::string ticker;
+    std::string full_name;
+    std::string meta_info;
+    crypto::public_key owner = crypto::null_pkey;
+
+    BEGIN_SERIALIZE()
+      FIELD(version)
+      FIELD(total_max_supply)
+      FIELD(current_supply)
+      FIELD(decimal_point)
+      FIELD(ticker)
+      FIELD(full_name)
+      FIELD(meta_info)
+      FIELD(owner)
+    END_SERIALIZE()
+  };
+
+  enum class token_descriptor_operation_type : uint8_t
+  {
+    undefined = 0,
+    register_token = 1,
+    mint_token = 2,
+    update_token = 3,
+    burn_token = 4,
+    _count
+  };
+
+  enum token_descriptor_operation_field : uint8_t
+  {
+    token_field_none = 0,
+    token_field_amount_commitment = 1 << 0,
+    token_field_token_id = 1 << 1,
+    token_field_descriptor = 1 << 2,
+    token_field_amount = 1 << 3,
+    token_field_token_id_salt = 1 << 4,
+  };
+
+  struct tx_extra_token_descriptor_operation
+  {
+    uint8_t version = 1;
+    token_descriptor_operation_type operation_type = token_descriptor_operation_type::undefined;
+    uint8_t fields = token_field_none;
+    crypto::public_key amount_commitment = crypto::null_pkey;
+    crypto::token_id token_id = crypto::null_tid;
+    token_descriptor_base descriptor{};
+    uint64_t amount = 0;
+    uint32_t token_id_salt = 0;
+
+    bool field_is_set(token_descriptor_operation_field field) const
+    {
+      return (fields & static_cast<uint8_t>(field)) != 0;
+    }
+
+    BEGIN_SERIALIZE()
+      FIELD(version)
+      ENUM_FIELD(operation_type, operation_type < token_descriptor_operation_type::_count)
+      FIELD(fields)
+      if (field_is_set(token_field_amount_commitment)) FIELD(amount_commitment)
+      if (field_is_set(token_field_token_id)) FIELD(token_id)
+      if (field_is_set(token_field_descriptor)) FIELD(descriptor)
+      if (field_is_set(token_field_amount)) FIELD(amount)
+      if (field_is_set(token_field_token_id_salt)) FIELD(token_id_salt)
+    END_SERIALIZE()
+  };
+
   struct tx_extra_beldex_name_system
   {
     uint8_t                 version = 0;
     bns::mapping_type       type;
+    bns::mapping_years      mapping_years;
     crypto::hash            name_hash;
     crypto::hash            prev_txid = crypto::null_hash;  // previous txid that purchased the mapping
     bns::extra_field        fields;
     bns::generic_owner      owner        = {};
     bns::generic_owner      backup_owner = {};
     bns::generic_signature  signature    = {};
-    std::string             encrypted_value; // binary format of the name->value mapping
+    std::string             encrypted_bchat_value; // binary format of the name->bchat_value mapping
+    std::string             encrypted_wallet_value; // binary format of the name->wallet_value mapping
+    std::string             encrypted_belnet_value; // binary format of the name->belnet_value mapping
+    std::string             encrypted_eth_addr_value; // binary format of the name->eth_addr_value mapping
 
     bool field_is_set (bns::extra_field bit) const { return (fields & bit) == bit; }
     bool field_any_set(bns::extra_field bit) const { return (fields & bit) != bns::extra_field::none; }
@@ -558,40 +672,55 @@ namespace cryptonote
     // True if this is updating some BNS info: has a signature and 1 or more updating field
     bool is_updating() const { return field_is_set(bns::extra_field::signature) && field_any_set(bns::extra_field::updatable_fields); }
     // True if this is buying a new BNS record
-    bool is_buying()   const { return (fields == bns::extra_field::buy || fields == bns::extra_field::buy_no_backup); }
+    bool is_buying()   const { return (field_is_set(bns::extra_field::buy) || field_is_set(bns::extra_field::buy_no_backup)) && field_any_set(bns::extra_field::buy_any_value); }
     // True if this is renewing an existing BNS: has no fields at all, is a renewal registration (i.e. belnet),
     // and has a non-null txid set (which should point to the most recent registration or update).
-    bool is_renewing() const { return fields == bns::extra_field::none && prev_txid && is_belnet_type(type); }
+    bool is_renewing() const { return fields == bns::extra_field::signature && prev_txid && is_renewal_type(mapping_years); }
 
     static tx_extra_beldex_name_system make_buy(
         bns::generic_owner const& owner,
         bns::generic_owner const* backup_owner,
-        bns::mapping_type type,
+        bns::mapping_years mapping_years,
         const crypto::hash& name_hash,
-        const std::string& encrypted_value,
+        const std::string& encrypted_bchat_value,
+        const std::string& encrypted_wallet_value,
+        const std::string& encrypted_belnet_value,
+        const std::string& encrypted_eth_addr_value,
         const crypto::hash& prev_txid);
 
-    static tx_extra_beldex_name_system make_renew(bns::mapping_type type, const crypto::hash& name_hash, const crypto::hash& prev_txid);
+    static tx_extra_beldex_name_system make_renew(
+        const bns::generic_signature& signature,
+        bns::mapping_years mapping_years, 
+        const crypto::hash& name_hash, 
+        const crypto::hash& prev_txid);
 
     static tx_extra_beldex_name_system make_update(
         const bns::generic_signature& signature,
-        bns::mapping_type type,
         const crypto::hash& name_hash,
-        std::string_view encrypted_value,
+        std::string_view encrypted_bchat_value,
+        std::string_view encrypted_wallet_value,
+        std::string_view encrypted_belnet_value,
+        std::string_view encrypted_eth_addr_value,
         const bns::generic_owner* owner,
         const bns::generic_owner* backup_owner,
         const crypto::hash& prev_txid);
 
     BEGIN_SERIALIZE()
       FIELD(version)
-      ENUM_FIELD(type, type < bns::mapping_type::_count)
+      if(version >=1)
+        ENUM_FIELD(mapping_years, mapping_years < bns::mapping_years::_count)
+      else
+        ENUM_FIELD(type, type < bns::mapping_type::_count)
       FIELD(name_hash)
       FIELD(prev_txid)
       ENUM_FIELD(fields, fields <= bns::extra_field::all)
       if (field_is_set(bns::extra_field::owner)) FIELD(owner);
       if (field_is_set(bns::extra_field::backup_owner)) FIELD(backup_owner);
       if (field_is_set(bns::extra_field::signature)) FIELD(signature);
-      if (field_is_set(bns::extra_field::encrypted_value)) FIELD(encrypted_value);
+      if (field_is_set(bns::extra_field::encrypted_bchat_value)) FIELD(encrypted_bchat_value);
+      if (field_is_set(bns::extra_field::encrypted_wallet_value)) FIELD(encrypted_wallet_value);
+      if (field_is_set(bns::extra_field::encrypted_belnet_value)) FIELD(encrypted_belnet_value);
+      if (field_is_set(bns::extra_field::encrypted_eth_addr_value)) FIELD(encrypted_eth_addr_value);
     END_SERIALIZE()
   };
 
@@ -618,10 +747,12 @@ namespace cryptonote
       tx_extra_tx_key_image_proofs,
       tx_extra_tx_key_image_unlock,
       tx_extra_burn,
+      tx_extra_token_descriptor_operation,
       tx_extra_merge_mining_tag,
       tx_extra_mysterious_minergate,
       tx_extra_padding,
-      tx_extra_security_signature
+      tx_extra_security_signature,
+      tx_extra_collateral_lock
       >;
 }
 
@@ -644,5 +775,7 @@ BINARY_VARIANT_TAG(cryptonote::tx_extra_tx_secret_key,               cryptonote:
 BINARY_VARIANT_TAG(cryptonote::tx_extra_tx_key_image_proofs,         cryptonote::TX_EXTRA_TAG_TX_KEY_IMAGE_PROOFS);
 BINARY_VARIANT_TAG(cryptonote::tx_extra_tx_key_image_unlock,         cryptonote::TX_EXTRA_TAG_TX_KEY_IMAGE_UNLOCK);
 BINARY_VARIANT_TAG(cryptonote::tx_extra_burn,                        cryptonote::TX_EXTRA_TAG_BURN);
+BINARY_VARIANT_TAG(cryptonote::tx_extra_token_descriptor_operation,  cryptonote::TX_EXTRA_TAG_TOKEN_DESCRIPTOR_OPERATION);
 BINARY_VARIANT_TAG(cryptonote::tx_extra_beldex_name_system,            cryptonote::TX_EXTRA_TAG_BELDEX_NAME_SYSTEM);
 BINARY_VARIANT_TAG(cryptonote::tx_extra_security_signature,            cryptonote::TX_EXTRA_TAG_SECURITY_SIGNATURE);
+BINARY_VARIANT_TAG(cryptonote::tx_extra_collateral_lock,               cryptonote::TX_EXTRA_TAG_COLLATERAL_LOCK);

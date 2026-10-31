@@ -32,7 +32,7 @@
 #include <atomic>
 #include <boost/algorithm/string.hpp>
 #include <limits>
-#include <oxenmq/hex.h>
+#include <oxenc/hex.h>
 #include <variant>
 #include "common/hex.h"
 #include "epee/wipeable_string.h"
@@ -54,11 +54,6 @@
 #define BELDEX_DEFAULT_LOG_CATEGORY "cn"
 
 using namespace crypto;
-
-static std::atomic<uint64_t> tx_hashes_calculated_count(0);
-static std::atomic<uint64_t> tx_hashes_cached_count(0);
-static std::atomic<uint64_t> block_hashes_calculated_count(0);
-static std::atomic<uint64_t> block_hashes_cached_count(0);
 
 #define CHECK_AND_ASSERT_THROW_MES_L1(expr, message) {if(!(expr)) {MWARNING(message); throw std::runtime_error(message);}}
 
@@ -136,25 +131,61 @@ namespace cryptonote
       rct::rctSig &rv = tx.rct_signatures;
       if (rv.type == rct::RCTType::Null)
         return true;
-      if (rv.outPk.size() != tx.vout.size())
+      // HF21: tx_out_zyphora outputs carry their own amount commitment and
+      // range proof, so they never appear in the legacy outPk vector. Counting
+      // them here would make every privacy-token transaction fail to re-parse.
+      const size_t native_outputs = std::count_if(tx.vout.begin(), tx.vout.end(), [](const tx_out& out) {
+        return !std::holds_alternative<tx_out_zyphora>(out.target);
+      });
+      if (rv.outPk.size() != native_outputs)
       {
         LOG_PRINT_L1("Failed to parse transaction from blob, bad outPk size in tx " << get_transaction_hash(tx));
         return false;
       }
-      for (size_t n = 0; n < tx.rct_signatures.outPk.size(); ++n)
+      size_t rct_output_index = 0;
+      for (size_t n = 0; n < tx.vout.size(); ++n)
       {
+        // tx_out_zyphora outputs carry their own amount commitment; they do not
+        // contribute to the legacy outPk vector, so skip them here.
+        if (std::holds_alternative<tx_out_zyphora>(tx.vout[n].target))
+          continue;
         if (!std::holds_alternative<txout_to_key>(tx.vout[n].target))
         {
           LOG_PRINT_L1("Unsupported output type in tx " << get_transaction_hash(tx));
           return false;
         }
-        rv.outPk[n].dest = rct::pk2rct(var::get<txout_to_key>(tx.vout[n].target).key);
+        rv.outPk[rct_output_index++].dest = rct::pk2rct(var::get<txout_to_key>(tx.vout[n].target).key);
       }
 
       if (!base_only)
       {
         const bool bulletproof = rct::is_rct_bulletproof(rv.type);
-        if (bulletproof)
+        const bool bulletproof_plus = rct::is_rct_bulletproof_plus(rv.type);
+        if (bulletproof_plus)
+        {
+          if (rv.p.bulletproofs_plus.size() != 1)
+          {
+            LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs_plus size in tx " << get_transaction_hash(tx));
+            return false;
+          }
+          if (rv.p.bulletproofs_plus[0].L.size() < 6)
+          {
+            LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs_plus L size in tx " << get_transaction_hash(tx));
+            return false;
+          }
+          const size_t max_outputs = rct::n_bulletproof_plus_max_amounts(rv.p.bulletproofs_plus[0]);
+          if (max_outputs < native_outputs)
+          {
+            LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs_plus max outputs in tx " << get_transaction_hash(tx));
+            return false;
+          }
+          const size_t n_amounts = native_outputs;
+          CHECK_AND_ASSERT_MES(n_amounts == rv.outPk.size(), false, "Internal error filling out V");
+          rv.p.bulletproofs_plus[0].V.resize(n_amounts);
+          for (size_t i = 0; i < n_amounts; ++i)
+            rv.p.bulletproofs_plus[0].V[i] = rct::scalarmultKey(rv.outPk[i].mask, rct::INV_EIGHT);
+        }
+        else if (bulletproof)
         {
           if (rv.p.bulletproofs.size() != 1)
           {
@@ -167,12 +198,12 @@ namespace cryptonote
             return false;
           }
           const size_t max_outputs = 1 << (rv.p.bulletproofs[0].L.size() - 6);
-          if (max_outputs < tx.vout.size())
+          if (max_outputs < native_outputs)
           {
             LOG_PRINT_L1("Failed to parse transaction from blob, bad bulletproofs max outputs in tx " << get_transaction_hash(tx));
             return false;
           }
-          const size_t n_amounts = tx.vout.size();
+          const size_t n_amounts = native_outputs;
           CHECK_AND_ASSERT_MES(n_amounts == rv.outPk.size(), false, "Internal error filling out V");
           rv.p.bulletproofs[0].V.resize(n_amounts);
           for (size_t i = 0; i < n_amounts; ++i)
@@ -546,7 +577,7 @@ namespace cryptonote
     try {
       serialization_s::deserialize_all(ar, tx_extra_fields);
     } catch (const std::exception& e) {
-      MWARNING(__func__ << ": failed to deserialize extra field: " << e.what() << "; extra = " << oxenmq::to_hex(tx_extra.begin(), tx_extra.end()));
+      MWARNING(__func__ << ": failed to deserialize extra field: " << e.what() << "; extra = " << oxenc::to_hex(tx_extra.begin(), tx_extra.end()));
       return false;
     }
 
@@ -865,7 +896,7 @@ namespace cryptonote
           value(newar, field);
       } while (ar.remaining_bytes() > 0);
     } catch (const std::exception& e) {
-      LOG_PRINT_L1(__func__ << ": failed to deserialize extra field: " << e.what() << "; extra = " << oxenmq::to_hex(tx_extra.begin(), tx_extra.end()));
+      LOG_PRINT_L1(__func__ << ": failed to deserialize extra field: " << e.what() << "; extra = " << oxenc::to_hex(tx_extra.begin(), tx_extra.end()));
       return false;
     }
 
@@ -926,6 +957,176 @@ namespace cryptonote
     bool result = add_tx_extra_field_to_tx_extra(tx_extra, field);
     CHECK_AND_NO_ASSERT_MES_L1(result, false, "failed to serialize tx extra burn amount");
     return result;
+  }
+  //---------------------------------------------------------------
+  bool get_collateral_lock_from_tx_extra(const std::vector<uint8_t>& tx_extra, tx_extra_collateral_lock& lock)
+  {
+    return get_field_from_tx_extra(tx_extra, lock);
+  }
+  //---------------------------------------------------------------
+  bool add_collateral_lock_to_tx_extra(std::vector<uint8_t>& tx_extra, const tx_extra_collateral_lock& lock)
+  {
+    tx_extra_field field = lock;
+    bool result = add_tx_extra_field_to_tx_extra(tx_extra, field);
+    CHECK_AND_NO_ASSERT_MES_L1(result, false, "failed to serialize tx extra collateral lock");
+    return result;
+  }
+  //---------------------------------------------------------------
+  bool add_token_descriptor_operation_to_tx_extra(std::vector<uint8_t>& tx_extra, const tx_extra_token_descriptor_operation& op)
+  {
+    tx_extra_field field = op;
+    bool result = add_tx_extra_field_to_tx_extra(tx_extra, field);
+    CHECK_AND_NO_ASSERT_MES_L1(result, false, "failed to serialize tx extra token descriptor operation");
+    return result;
+  }
+  //---------------------------------------------------------------
+  bool get_token_descriptor_operation_from_tx_extra(const std::vector<uint8_t>& tx_extra, tx_extra_token_descriptor_operation& op, size_t skip)
+  {
+    return get_field_from_tx_extra(tx_extra, op, skip);
+  }
+  //---------------------------------------------------------------
+  bool is_out_to_acc(const account_keys& acc, const tx_out_zyphora& zout,
+                     const crypto::public_key& tx_pub_key, size_t output_index)
+  {
+    crypto::key_derivation derivation;
+    if (!acc.get_device().generate_key_derivation(tx_pub_key, acc.m_view_secret_key, derivation))
+      return false;
+    crypto::public_key expected;
+    if (!acc.get_device().derive_public_key(derivation, output_index,
+                                            acc.m_account_address.m_spend_public_key, expected))
+      return false;
+    return expected == zout.stealth_address;
+  }
+  //---------------------------------------------------------------
+  rct::key zyphora_derivation_to_scalar(const crypto::key_derivation& derivation,
+                                          size_t output_index,
+                                          const char* domain)
+  {
+    // Base scalar from the standard derivation path
+    crypto::ec_scalar base{};
+    crypto::derivation_to_scalar(derivation, output_index, base);
+
+    // Domain-separate by hashing: H(base || domain_string)
+    // This ensures "token_blind", "amount_mask", "enc_amount" produce
+    // independent, uncorrelated scalars from the same derivation.
+    const size_t domain_len = strlen(domain);
+    std::vector<uint8_t> buf(32 + domain_len);
+    memcpy(buf.data(), base.data, 32);
+    memcpy(buf.data() + 32, domain, domain_len);
+
+    rct::key result;
+    keccak(buf.data(), (int)buf.size(), result.bytes, 32);
+    sc_reduce32(result.bytes);
+    return result;
+  }
+  //---------------------------------------------------------------
+  bool decode_zyphora_output(const account_keys& acc,
+                               const tx_out_zyphora& zout,
+                               const crypto::key_derivation& derivation,
+                               size_t output_index,
+                               uint64_t& amount_out,
+                               crypto::token_id& token_id_out,
+                               rct::key& amount_mask_out,
+                               rct::key& token_blinding_mask_out)
+  {
+    // 1. Ownership has already been verified by check_acc_out_precomp_once / is_out_to_acc_precomp
+
+    // 2. Recover token blinding mask r and plaintext token_id
+    //    T = token_id + r*X  =>  token_id = T - r*X
+    rct::key r = zyphora_derivation_to_scalar(derivation, output_index, "token_blind");
+    rct::key rX = rct::scalarmultX(r);
+    rct::key token_id_rct;
+    rct::subKeys(token_id_rct, rct::tid2rct(zout.blinded_token_id), rX);
+    token_id_out = rct::rct2tid(token_id_rct);
+    token_blinding_mask_out = r;
+
+    // 3. Recover amount mask and decrypt amount
+    //    C = amount*T + mask*G  (we verify this below)
+    amount_mask_out = zyphora_derivation_to_scalar(derivation, output_index, "amount_mask");
+
+    // 4. Decrypt amount: enc_amount XOR le64(enc_mask)
+    rct::key enc_mask = zyphora_derivation_to_scalar(derivation, output_index, "enc_amount");
+    uint64_t enc_mask_64;
+    memcpy(&enc_mask_64, enc_mask.bytes, sizeof(uint64_t));
+    amount_out = zout.encrypted_amount ^ enc_mask_64;
+
+    // 5. Verify: recompute amount commitment and compare.
+    //    C = amount*T + mask*G -- the commitment is built on this output's
+    //    OWN blinded token id T (zout.blinded_token_id), not the recovered
+    //    plaintext token_id -- see rct::commitToken.
+    rct::key expected_C = rct::commitToken(amount_mask_out, rct::tid2rct(zout.blinded_token_id), amount_out);
+    if (expected_C != rct::pk2rct(zout.amount_commitment))
+    {
+      MWARNING("zyphora output commitment mismatch — output corrupted or not ours");
+      return false;
+    }
+
+    return true;
+  }
+  //---------------------------------------------------------------
+  std::string print_token_amount(uint64_t amount, uint8_t decimal_point, bool strip_zeros)
+  {
+    std::string s = std::to_string(amount);
+    if (s.size() < static_cast<size_t>(decimal_point) + 1)
+      s.insert(0, static_cast<size_t>(decimal_point) + 1 - s.size(), '0');
+
+    if (decimal_point > 0)
+      s.insert(s.size() - decimal_point, ".");
+
+    if (strip_zeros && decimal_point > 0)
+    {
+      while (!s.empty() && s.back() == '0')
+        s.pop_back();
+      if (!s.empty() && s.back() == '.')
+        s.pop_back();
+    }
+
+    return s;
+  }
+  //---------------------------------------------------------------
+  bool parse_token_amount(uint64_t& amount, std::string_view str_amount, uint8_t decimal_point)
+  {
+    while (!str_amount.empty() && std::isspace((unsigned char)str_amount.front()))
+      str_amount.remove_prefix(1);
+    while (!str_amount.empty() && std::isspace((unsigned char)str_amount.back()))
+      str_amount.remove_suffix(1);
+
+    std::string str(str_amount);
+    auto point_index = str.find_first_of('.');
+    size_t fraction_size = 0;
+
+    if (point_index != std::string::npos)
+    {
+      fraction_size = str.size() - point_index - 1;
+      while (fraction_size > 0 && str.back() == '0')
+      {
+        str.pop_back();
+        --fraction_size;
+      }
+      if (fraction_size > decimal_point)
+        return false; // too many decimal places
+      str.erase(point_index, 1);
+    }
+
+    if (str.empty())
+      return false;
+
+    if (fraction_size < decimal_point)
+      str.append(decimal_point - fraction_size, '0');
+
+    for (char c : str)
+      if (!std::isdigit((unsigned char)c))
+        return false;
+
+    try
+    {
+      amount = std::stoull(str);
+    }
+    catch (const std::exception&)
+    {
+      return false;
+    }
+    return true;
   }
   //---------------------------------------------------------------
   bool get_inputs_money_amount(const transaction& tx, uint64_t& money)
@@ -1027,7 +1228,7 @@ namespace cryptonote
   //---------------------------------------------------------------
   std::string short_hash_str(const crypto::hash& h)
   {
-    return oxenmq::to_hex(tools::view_guts(h).substr(0, 4)) + "....";
+    return oxenc::to_hex(tools::view_guts(h).substr(0, 4)) + "....";
   }
   //---------------------------------------------------------------
   bool is_out_to_acc(const account_keys& acc, const txout_to_key& out_key, const crypto::public_key& tx_pub_key, const std::vector<crypto::public_key>& additional_tx_pub_keys, size_t output_index)
@@ -1089,6 +1290,15 @@ namespace cryptonote
     size_t i = 0;
     for(const tx_out& o:  tx.vout)
     {
+      if (std::holds_alternative<tx_out_zyphora>(o.target))
+      {
+        // Confidential output: plaintext amount is 0 on-chain; the wallet
+        // decrypts the real amount during scan_output(). Only record the index here.
+        if (is_out_to_acc(acc, var::get<tx_out_zyphora>(o.target), tx_pub_key, i))
+          outs.push_back(i);
+        i++;
+        continue;
+      }
       CHECK_AND_ASSERT_MES(std::holds_alternative<txout_to_key>(o.target), false, "wrong type id in transaction out" );
       if(is_out_to_acc(acc, var::get<txout_to_key>(o.target), tx_pub_key, additional_tx_pub_keys, i))
       {
@@ -1257,11 +1467,38 @@ namespace cryptonote
     {
       serialization_s::binary_string_archiver ba;
       size_t mixin = 0;
-      if (t.vin.size() > 0 && std::holds_alternative<txin_to_key>(t.vin[0]))
-        mixin = var::get<txin_to_key>(t.vin[0]).key_offsets.size() - 1;
+      if (t.vin.size() > 0)
+      {
+        if (std::holds_alternative<txin_to_key>(t.vin[0]))
+          mixin = var::get<txin_to_key>(t.vin[0]).key_offsets.size() - 1;
+        else if (std::holds_alternative<txin_zy_input>(t.vin[0]))
+          mixin = var::get<txin_zy_input>(t.vin[0]).key_offsets.size() - 1;
+      }
+      // HF21: the native rct prunable arrays are sized to the non-zyphora
+      // in/out count -- zyphora in/outs are proven via zy_sig / token_proofs,
+      // not the native CLSAGs/pseudoOuts. Must match transaction::serialize()
+      // in cryptonote_basic.h exactly.
+      size_t native_inputs = 0;
+      for (const auto& in : t.vin)
+        if (std::holds_alternative<txin_to_key>(in))
+          ++native_inputs;
+      size_t native_outputs = 0;
+      for (const auto& o : t.vout)
+        if (!std::holds_alternative<tx_out_zyphora>(o.target))
+          ++native_outputs;
       try {
         const_cast<transaction&>(t).rct_signatures.p.serialize_rctsig_prunable(
-                ba, t.rct_signatures.type, t.vin.size(), t.vout.size(), mixin);
+                ba, t.rct_signatures.type, native_inputs, native_outputs, mixin);
+        // HF21: the ZY input signatures (zy_sig) and token_proofs are part of
+        // the prunable section on the wire, so the prunable hash must cover
+        // them too -- zy_sig first then token_proofs, under the SAME gates and
+        // in the SAME order as transaction::serialize(), or the tx hash will
+        // not reproduce.
+        if (t.has_zyphora_inputs())
+          serialization_s::value(ba, const_cast<transaction&>(t).zy_sig);
+        if (!t.token_proofs.empty() || t.has_zyphora_outputs()
+            || t.type == txtype::update_token || t.type == txtype::burn_token)
+          serialization_s::value(ba, const_cast<transaction&>(t).token_proofs);
       } catch (const std::exception& e) {
         LOG_ERROR("Failed to serialize rct signatures (prunable): " << e.what());
         return false;
@@ -1430,10 +1667,8 @@ namespace cryptonote
         }
         *blob_size = t.blob_size;
       }
-      ++tx_hashes_cached_count;
       return true;
     }
-    ++tx_hashes_calculated_count;
     bool ret = calculate_transaction_hash(t, res, blob_size);
     if (!ret)
       return false;
@@ -1472,10 +1707,8 @@ namespace cryptonote
     if (b.is_hash_valid())
     {
       res = b.hash;
-      ++block_hashes_cached_count;
       return true;
     }
-    ++block_hashes_calculated_count;
     bool ret = calculate_block_hash(b, res);
     if (!ret)
       return false;
@@ -1525,7 +1758,6 @@ namespace cryptonote
     if (block_hash)
     {
       calculate_block_hash(b, *block_hash);
-      ++block_hashes_calculated_count;
       b.hash = *block_hash;
       b.set_hash_valid(true);
     }
@@ -1585,14 +1817,6 @@ namespace cryptonote
     for(auto& th: b.tx_hashes)
       txs_ids.push_back(th);
     return get_tx_tree_hash(txs_ids);
-  }
-  //---------------------------------------------------------------
-  void get_hash_stats(uint64_t &tx_hashes_calculated, uint64_t &tx_hashes_cached, uint64_t &block_hashes_calculated, uint64_t & block_hashes_cached)
-  {
-    tx_hashes_calculated = tx_hashes_calculated_count;
-    tx_hashes_cached = tx_hashes_cached_count;
-    block_hashes_calculated = block_hashes_calculated_count;
-    block_hashes_cached = block_hashes_cached_count;
   }
   //---------------------------------------------------------------
   crypto::secret_key encrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase)

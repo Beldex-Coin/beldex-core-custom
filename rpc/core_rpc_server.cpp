@@ -38,7 +38,7 @@
 #include <iterator>
 #include <type_traits>
 #include <variant>
-#include <oxenmq/base64.h>
+#include <oxenc/base64.h>
 #include "crypto/crypto.h"
 #include "cryptonote_basic/hardfork.h"
 #include "cryptonote_basic/tx_extra.h"
@@ -56,17 +56,14 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/account.h"
 #include "cryptonote_basic/cryptonote_basic_impl.h"
-#include "cryptonote_core/tx_sanity_check.h"
 #include "cryptonote_core/uptime_proof.h"
-#include "epee/misc_language.h"
 #include "net/parse.h"
 #include "crypto/hash.h"
 #include "rpc/rpc_args.h"
 #include "core_rpc_server_error_codes.h"
 #include "p2p/net_node.h"
 #include "version.h"
-#include <nlohmann/json.hpp>
-using json = nlohmann::json;
+#include <fmt/core.h>
 
 #undef BELDEX_DEFAULT_LOG_CATEGORY
 #define BELDEX_DEFAULT_LOG_CATEGORY "daemon.rpc"
@@ -85,7 +82,7 @@ namespace cryptonote { namespace rpc {
       Request load(rpc_request& request) {
         Request req{};
         if (auto body = request.body_view()) {
-          if (!epee::serialization_e::load_t_from_json(req, *body))
+          if (!epee::serialization::load_t_from_json(req, *body))
             throw parse_error{"Failed to parse JSON parameters"};
         } else {
           // This is nasty.  TODO: get rid of epee's horrible serialization code.
@@ -105,7 +102,7 @@ namespace cryptonote { namespace rpc {
           // example '[bool, 1, "hi"]`).
           //
           // Conclusion: it needs to go.
-          if (auto* section = std::get_if<epee::serialization_e::section>(&storage_entry))
+          if (auto* section = std::get_if<epee::serialization::section>(&storage_entry))
             req.load(epee_stuff.first, section);
           else
             throw std::runtime_error{"only top-level JSON object values are currently supported"};
@@ -117,14 +114,14 @@ namespace cryptonote { namespace rpc {
       template <typename R = typename RPC::response, std::enable_if_t<std::is_same<R, std::string>::value, int> = 0>
       std::string serialize(std::string&& res) {
         std::ostringstream o;
-        epee::serialization_e::dump_as_json(o, std::move(res), 0 /*indent*/, false /*newlines*/);
+        epee::serialization::dump_as_json(o, std::move(res), 0 /*indent*/, false /*newlines*/);
         return o.str();
       }
 
       template <typename R = typename RPC::response, std::enable_if_t<!std::is_same<R, std::string>::value, int> = 0>
       std::string serialize(typename RPC::response&& res) {
         std::string response;
-        epee::serialization_e::store_t_to_json(res, response, 0 /*indent*/, false /*newlines*/);
+        epee::serialization::store_t_to_json(res, response, 0 /*indent*/, false /*newlines*/);
         return response;
       }
     };
@@ -142,7 +139,7 @@ namespace cryptonote { namespace rpc {
         else
           throw std::runtime_error{"Internal error: can't load binary a RPC command with non-string body"};
         if (sizeof(data)>0){
-            if (!epee::serialization_e::load_t_from_binary(req, data))
+            if (!epee::serialization::load_t_from_binary(req, data))
                 throw parse_error{"Failed to parse binary data parameterS"};
         }
         else{
@@ -154,7 +151,7 @@ namespace cryptonote { namespace rpc {
 
       std::string serialize(typename RPC::response&& res) {
         std::string response;
-        epee::serialization_e::store_t_to_binary(res, response);
+        epee::serialization::store_t_to_binary(res, response);
         return response;
       }
     };
@@ -396,7 +393,7 @@ namespace cryptonote { namespace rpc {
     }
 
     res.difficulty = m_core.get_blockchain_storage().get_difficulty_for_next_block(next_block_is_POS);
-    res.target = tools::to_seconds((next_block_is_POS?TARGET_BLOCK_TIME_V17:TARGET_BLOCK_TIME));
+    res.target = tools::to_seconds((next_block_is_POS?TARGET_BLOCK_TIME:TARGET_BLOCK_TIME_OLD));
     res.tx_count = m_core.get_blockchain_storage().get_total_transactions() - res.height; //without coinbase
     res.tx_pool_size = m_core.get_pool().get_transactions_count();
     if (context.admin)
@@ -429,10 +426,7 @@ namespace cryptonote { namespace rpc {
     res.block_size_median = res.block_weight_median = m_core.get_blockchain_storage().get_current_cumulative_block_weight_median();
 
     auto bns_counts = m_core.get_blockchain_storage().name_system_db().get_mapping_counts(res.height);
-    res.bns_counts = {
-      bns_counts[bns::mapping_type::bchat],
-      bns_counts[bns::mapping_type::wallet],
-      bns_counts[bns::mapping_type::belnet]};
+    res.bns_counts = bns_counts;
 
     if (context.admin)
     {
@@ -549,160 +543,6 @@ namespace cryptonote { namespace rpc {
     res.status = STATUS_OK;
     return res;
   }
-  
-  //------------------------------------------------------------------------------------------------------------------------------
-  GET_BLOCKS_FAST_RPC::response core_rpc_server::invoke(GET_BLOCKS_FAST_RPC::request&& req, rpc_context context)
-  {
-    GET_BLOCKS_FAST_RPC::response res{};
-    
-    typedef std::vector<uint64_t> tx_output_indices_rpc;
-    typedef std::vector<tx_output_indices_rpc> block_output_indices_rpc;
-    std::vector<block_output_indices_rpc> output_indices_rpc;
-    PERF_TIMER(on_get_blocks);
-    if (use_bootstrap_daemon_if_necessary<GET_BLOCKS_FAST_RPC>(req, res))
-      return res;
-    
-    std::vector<std::pair<std::pair<blobdata, crypto::hash>, std::vector<std::pair<crypto::hash, blobdata> > > > blocks;
-
-    if(!m_core.find_blockchain_supplement(req.start_height, req.block_ids, blocks, res.current_height, res.start_height, req.prune, !req.no_miner_tx, GET_BLOCKS_FAST::MAX_COUNT))
-    {
-      res.status = "Failed";
-      return res;
-    }
-
-    size_t size = 0, ntxes = 0;
-    res.blocks.reserve(blocks.size());
-    res.output_indices.reserve(blocks.size());
-    
-    cryptonote::block blk;
-    cryptonote::transaction tx_hash;
-    uint64_t block_count = 0;
-    for(auto& bd: blocks)
-    {
-      res.blocks.resize(res.blocks.size()+1);
-      if (!parse_and_validate_block_from_blob(bd.first.first, blk))
-      {
-        res.blocks.clear();
-        res.output_indices.clear();
-        res.status = "Failed";
-        return res;
-      }
-
-      char hexstr[10];
-      std::string extra_res;
-      for(int i=0;i<blk.miner_tx.extra.size();i++)
-      {
-        sprintf(hexstr, "%02x", blk.miner_tx.extra[i]);
-        extra_res+=hexstr;
-      }
-      //----------blk data's key changed for lws -----------------------------------
-      std::string block_json = obj_to_json_str(blk);
-      auto block = json::parse(block_json);
-    
-      if(block.contains("POS"))
-      {
-        block.erase(block.find("POS"));
-      }
-
-      block["miner_tx"]["extra"] = extra_res;
-      //-----------------------------------------------------------------------
-      if (bd.second.size() != blk.tx_hashes.size())
-      {
-        res.blocks.clear();
-        res.output_indices.clear();
-        res.status = "Failed";
-        return res;
-      }
-      
-      block_output_indices_rpc indices;
-      // miner tx output indices
-      {
-        tx_output_indices_rpc tx_indices;
-        if (!m_core.get_tx_outputs_gindexs(get_transaction_hash(blk.miner_tx), tx_indices))
-        {
-          res.status = "Failed";
-          return res;
-        }
-        indices.push_back(std::move(tx_indices));
-      }
-
-      auto hash_it = blk.tx_hashes.begin();
-      std::vector<std::string> tx;
-      json tx_hash_block = {};
-      for (const auto& blob : bd.second)
-      {
-        tx_hash.pruned = req.prune;
-
-        const bool parsed = req.prune ?
-          parse_and_validate_tx_base_from_blob(blob.second, tx_hash) :
-          parse_and_validate_tx_from_blob(blob.second, tx_hash);
-        
-        if (parsed)
-        {
-          char hexstr_tx[10];
-          std::string extra_res_tx;
-          for(int i=0;i<tx_hash.extra.size();i++)
-          {
-            sprintf(hexstr_tx, "%02x", tx_hash.extra[i]);
-            extra_res_tx+=hexstr_tx;
-          }
-          //----------tx_hash data's key changed -----------------------
-          std::string block_transactions = obj_to_json_str(tx_hash);
-          auto block_tx = json::parse(block_transactions);
-
-          if(!(block_tx.contains("rct_signatures"))){
-            ++hash_it;
-            continue;
-          }
-          else{
-            tx_output_indices_rpc tx_indices;
-            if (!m_core.get_tx_outputs_gindexs(*hash_it, tx_indices))
-            {
-              res.status ="failed";
-              return res;
-            }
-            indices.push_back(std::move(tx_indices));
-            ++hash_it;
-          }
-
-          block_tx["extra"] = extra_res_tx;
-
-          tx_hash_block.push_back(tools::type_to_hex(blob.first));
-          tx.push_back(block_tx.dump());
-          //---------------------------------------------------------------------------------------
-        }            
-        else
-          ++hash_it;
-      }
-
-      block["tx_hashes"] = tx_hash_block;
-      res.blocks.back().block = block.dump();
-      if(bd.second.size() != 0)
-      {
-        for(auto it : tx)
-        {
-          res.blocks[block_count].transactions.push_back(it);
-        }
-      }
-      else
-      {
-        json tx = json::array();
-        res.blocks[block_count].transactions.push_back(tx.dump());
-      }
-
-      output_indices_rpc.push_back(indices);
-      block_count++;
-    }
-
-    std::string block_indices = obj_to_json_str(output_indices_rpc);
-    auto blkindices = json::parse(block_indices);
-    res.output_indices = blkindices.dump();
-
-    MGINFO("on_get_blocks: " << blocks.size() << " blocks, " << ntxes << " txes, size " << size);
-    res.status = STATUS_OK;
-    return res;
-  }
-  //---------------------------------------------------------------------------------------------------------------------------
   GET_ALT_BLOCKS_HASHES::response core_rpc_server::invoke(GET_ALT_BLOCKS_HASHES::request&& req, rpc_context context)
   {
     GET_ALT_BLOCKS_HASHES::response res{};
@@ -775,43 +615,11 @@ namespace cryptonote { namespace rpc {
       return res;
 
     res.start_height = req.start_height;
-
     if(!m_core.get_blockchain_storage().find_blockchain_supplement(req.block_ids, res.m_block_ids, res.start_height, res.current_height, false))
     {
       res.status = "Failed";
       return res;
     }
-
-    res.status = STATUS_OK;
-    return res;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  GET_HASHES_FAST_RPC::response core_rpc_server::invoke(GET_HASHES_FAST_RPC::request&& req, rpc_context context)
-  {
-    GET_HASHES_FAST_RPC::response res{};
-
-    PERF_TIMER(on_get_hashes);
-
-    // std::cout << "req.start_height : " << req.start_height << std::endl;
-    
-    if (use_bootstrap_daemon_if_necessary<GET_HASHES_FAST_RPC>(req, res))
-      return res;
-
-    res.start_height = req.start_height;
-    std::vector<crypto::hash> blk_ids;
-    if(!m_core.get_blockchain_storage().find_blockchain_supplement_rpc(req.block_ids, blk_ids, res.start_height, res.current_height, false))
-    {
-      res.status = "Failed";
-      return res;
-    }
-
-   res.m_block_ids.reserve(blk_ids.size());
-
-   for (const crypto::hash &m_blocks_id : blk_ids)
-    {
-       res.m_block_ids.push_back(tools::type_to_hex(m_blocks_id));
-    }
-    
 
     res.status = STATUS_OK;
     return res;
@@ -917,9 +725,9 @@ namespace cryptonote { namespace rpc {
       void operator()(const tx_extra_nonce& x) {
         if ((x.nonce.size() == sizeof(crypto::hash) + 1 && x.nonce[0] == TX_EXTRA_NONCE_PAYMENT_ID)
             || (x.nonce.size() == sizeof(crypto::hash8) + 1 && x.nonce[0] == TX_EXTRA_NONCE_ENCRYPTED_PAYMENT_ID))
-          entry.payment_id = oxenmq::to_hex(x.nonce.begin() + 1, x.nonce.end());
+          entry.payment_id = oxenc::to_hex(x.nonce.begin() + 1, x.nonce.end());
         else
-          entry.extra_nonce = oxenmq::to_hex(x.nonce);
+          entry.extra_nonce = oxenc::to_hex(x.nonce);
       }
       void operator()(const tx_extra_merge_mining_tag& x) { entry.mm_depth = x.depth; entry.mm_root = tools::type_to_hex(x.merkle_root); }
       void operator()(const tx_extra_additional_pub_keys& x) { entry.additional_pubkeys = hexify(x.data); }
@@ -988,21 +796,25 @@ namespace cryptonote { namespace rpc {
       }
       void operator()(const tx_extra_beldex_name_system& x) {
         auto& bns = entry.bns.emplace();
-          bns.blocks = bns::expiry_blocks(nettype, x.type,hf_version) ;
-        switch (x.type)
-        {
-          case bns::mapping_type::belnet: [[fallthrough]];
-          case bns::mapping_type::belnet_2years: [[fallthrough]];
-          case bns::mapping_type::belnet_5years: [[fallthrough]];
-          case bns::mapping_type::belnet_10years: bns.type = "belnet"; break;
+        bns.version = x.version;          
+        if ((x.is_buying() || x.is_renewing()) && (x.version == 1))
+          bns.blocks = bns::expiry_blocks(nettype, x.mapping_years) ;
+        if(x.version == 0)
+          switch (x.type)
+          {
+            case bns::mapping_type::belnet: [[fallthrough]];
+            case bns::mapping_type::belnet_2years: [[fallthrough]];
+            case bns::mapping_type::belnet_5years: [[fallthrough]];
+            case bns::mapping_type::belnet_10years: bns.type = "belnet"; break;
 
-          case bns::mapping_type::bchat: bns.type = "bchat"; break;
-          case bns::mapping_type::wallet:  bns.type = "wallet"; break;
+            case bns::mapping_type::bchat: bns.type = "bchat"; break;
+            case bns::mapping_type::wallet:  bns.type = "wallet"; break;
+            case bns::mapping_type::eth_addr:  bns.type = "eth_addr"; break;
 
-          case bns::mapping_type::update_record_internal: [[fallthrough]];
-          case bns::mapping_type::_count:
-                                           break;
-        }
+            case bns::mapping_type::update_record_internal: [[fallthrough]];
+            case bns::mapping_type::_count:
+              break;
+          }
         if (x.is_buying())
           bns.buy = true;
         else if (x.is_updating())
@@ -1010,8 +822,14 @@ namespace cryptonote { namespace rpc {
         else if (x.is_renewing())
           bns.renew = true;
         bns.name_hash = tools::type_to_hex(x.name_hash);
-        if (!x.encrypted_value.empty())
-          bns.value = oxenmq::to_hex(x.encrypted_value);
+        if (!x.encrypted_bchat_value.empty())
+          bns.value_bchat = oxenc::to_hex(x.encrypted_bchat_value);
+        if (!x.encrypted_wallet_value.empty())
+          bns.value_wallet = oxenc::to_hex(x.encrypted_wallet_value);
+        if (!x.encrypted_belnet_value.empty())
+          bns.value_belnet = oxenc::to_hex(x.encrypted_belnet_value);
+        if (!x.encrypted_eth_addr_value.empty())
+          bns.value_eth_addr = oxenc::to_hex(x.encrypted_eth_addr_value);
         _load_owner(bns.owner, x.owner);
         _load_owner(bns.backup_owner, x.backup_owner);
       }
@@ -1106,7 +924,7 @@ namespace cryptonote { namespace rpc {
               res.status = "Failed to parse and validate tx from blob";
               return res;
             }
-            serialization_s::binary_string_archiver ba;
+            serialization::binary_string_archiver ba;
             try {
               tx.serialize_base(ba);
             } catch (const std::exception& e) {
@@ -1161,9 +979,9 @@ namespace cryptonote { namespace rpc {
         }
         else
         {
-          e.pruned_as_hex = oxenmq::to_hex(unprunable_data);
+          e.pruned_as_hex = oxenc::to_hex(unprunable_data);
           if (!req.prune && prunable && !pruned)
-            e.prunable_as_hex = oxenmq::to_hex(prunable_data);
+            e.prunable_as_hex = oxenc::to_hex(prunable_data);
         }
       }
       else
@@ -1172,7 +990,7 @@ namespace cryptonote { namespace rpc {
         tx_data = unprunable_data;
         tx_data += prunable_data;
         if (!req.decode_as_json)
-          e.as_hex = oxenmq::to_hex(tx_data);
+          e.as_hex = oxenc::to_hex(tx_data);
       }
 
       cryptonote::transaction t;
@@ -1265,17 +1083,11 @@ namespace cryptonote { namespace rpc {
     std::vector<crypto::key_image> key_images;
     for(const auto& ki_hex_str: req.key_images)
     {
-      blobdata b;
-      if(!epee::string_tools::parse_hexstr_to_binbuff(ki_hex_str, b))
+      if (!tools::hex_to_type(ki_hex_str, key_images.emplace_back()))
       {
         res.status = "Failed to parse hex representation of key image";
         return res;
       }
-      if(b.size() != sizeof(crypto::key_image))
-      {
-        res.status = "Failed, size of data mismatch";
-      }
-      key_images.push_back(*reinterpret_cast<const crypto::key_image*>(b.data()));
     }
     std::vector<bool> spent_status;
     bool r = m_core.are_key_images_spent(key_images, spent_status);
@@ -1334,32 +1146,12 @@ namespace cryptonote { namespace rpc {
 
     CHECK_CORE_READY();
 
-    std::string tx_blob;
-    if(!epee::string_tools::parse_hexstr_to_binbuff(req.tx_as_hex, tx_blob))
-    {
+    if (!oxenc::is_hex(req.tx_as_hex))    {
       LOG_PRINT_L0("[on_send_raw_tx]: Failed to parse tx from hexbuff: " << req.tx_as_hex);
       res.status = "Failed";
       return res;
     }
-    cryptonote::transaction tx_lws;
-    if(parse_and_validate_tx_base_from_blob(tx_blob, tx_lws))
-    {
-      std::string block_transactions = obj_to_json_str(tx_lws);
-          auto block_tx = json::parse(block_transactions);
-      std::cout << "block_tx : " << block_tx << std::endl;
-    }
-    else
-    {
-       LOG_PRINT_L0("can't convert into tx object blob" << tx_blob);
-    }
-    if (req.do_sanity_checks && !cryptonote::tx_sanity_check(tx_blob, m_core.get_blockchain_storage().get_num_mature_outputs(0)))
-    {
-      res.status = "Failed";
-      res.reason = "Sanity check failed";
-      res.sanity_check_failed = true;
-      return res;
-    }
-    res.sanity_check_failed = false;
+    auto tx_blob = oxenc::from_hex(req.tx_as_hex);
 
     if (req.flash)
     {
@@ -1511,7 +1303,7 @@ namespace cryptonote { namespace rpc {
 
     const miner& lMiner = m_core.get_miner();
     res.active = lMiner.is_mining();
-    res.block_target = tools::to_seconds(TARGET_BLOCK_TIME); // old_block_time
+    res.block_target = tools::to_seconds(TARGET_BLOCK_TIME_OLD); // old_block_time
     res.difficulty = m_core.get_blockchain_storage().get_difficulty_for_next_block(false /*POS*/);
     if ( lMiner.is_mining() ) {
       res.speed = lMiner.get_speed();
@@ -1691,7 +1483,7 @@ namespace cryptonote { namespace rpc {
 
     m_core.get_pool().get_transactions_and_spent_keys_info(res.transactions, res.spent_key_images, load_extra, context.admin);
     for (tx_info& txi : res.transactions)
-      txi.tx_blob = oxenmq::to_hex(txi.tx_blob);
+      txi.tx_blob = oxenc::to_hex(txi.tx_blob);
     res.status = STATUS_OK;
     return res;
   }
@@ -1865,8 +1657,9 @@ namespace cryptonote { namespace rpc {
     cryptonote::blobdata blob_reserve;
     if(!req.extra_nonce.empty())
     {
-      if(!epee::string_tools::parse_hexstr_to_binbuff(req.extra_nonce, blob_reserve))
+      if(!oxenc::is_hex(req.extra_nonce))
         throw rpc_error{ERROR_WRONG_PARAM, "Parameter extra_nonce should be a hex string"};
+      blob_reserve = oxenc::from_hex(req.extra_nonce);
     }
     else
       blob_reserve.resize(req.reserve_size, 0);
@@ -1921,8 +1714,8 @@ namespace cryptonote { namespace rpc {
     }
     blobdata hashing_blob = get_block_hashing_blob(b);
     res.prev_hash = tools::type_to_hex(b.prev_id);
-    res.blocktemplate_blob = oxenmq::to_hex(block_blob);
-    res.blockhashing_blob =  oxenmq::to_hex(hashing_blob);
+    res.blocktemplate_blob = oxenc::to_hex(block_blob);
+    res.blockhashing_blob =  oxenc::to_hex(hashing_blob);
     res.status = STATUS_OK;
     return res;
   }
@@ -1943,10 +1736,9 @@ namespace cryptonote { namespace rpc {
     CHECK_CORE_READY();
     if(req.blob.size()!=1)
       throw rpc_error{ERROR_WRONG_PARAM, "Wrong param"};
-    blobdata blockblob;
-    if(!epee::string_tools::parse_hexstr_to_binbuff(req.blob[0], blockblob))
+    if(!oxenc::is_hex(req.blob[0]))
       throw rpc_error{ERROR_WRONG_BLOCKBLOB, "Wrong block blob"};
-
+    auto blockblob =oxenc::from_hex(req.blob[0]);
     // Fixing of high orphan issue for most pools
     // Thanks Boolberry!
     block b;
@@ -1993,10 +1785,10 @@ namespace cryptonote { namespace rpc {
       res.status = template_res.status;
 
       blobdata blockblob;
-      if(!epee::string_tools::parse_hexstr_to_binbuff(template_res.blocktemplate_blob, blockblob))
+      if(!oxenc::is_hex(template_res.blocktemplate_blob))
         throw rpc_error{ERROR_WRONG_BLOCKBLOB, "Wrong block blob"};
       block b;
-      if(!parse_and_validate_block_from_blob(blockblob, b))
+      if(!parse_and_validate_block_from_blob(oxenc::from_hex(template_res.blocktemplate_blob), b))
         throw rpc_error{ERROR_WRONG_BLOCKBLOB, "Wrong block blob"};
       b.nonce = req.starting_nonce;
       miner::find_nonce_for_given_block([this](const cryptonote::block &b, uint64_t height, unsigned int threads, crypto::hash &hash) {
@@ -2004,7 +1796,7 @@ namespace cryptonote { namespace rpc {
         return true;
       }, b, template_res.difficulty, template_res.height);
 
-      submit_req.blob[0] = oxenmq::to_hex(block_to_blob(b));
+      submit_req.blob[0] = oxenc::to_hex(block_to_blob(b));
       auto submit_res = invoke(std::move(submit_req), context);
       res.status = submit_res.status;
 
@@ -2041,7 +1833,8 @@ namespace cryptonote { namespace rpc {
     response.cumulative_difficulty = m_core.get_blockchain_storage().get_db().get_block_cumulative_difficulty(height);
     response.block_weight = m_core.get_blockchain_storage().get_db().get_block_weight(height);
     response.reward = get_block_reward(blk);
-    response.miner_reward = blk.miner_tx.vout[0].amount;
+    if(blk.nonce != 0)
+      response.miner_reward = blk.miner_tx.vout[0].amount;
     response.block_size = response.block_weight = m_core.get_blockchain_storage().get_db().get_block_weight(height);
     response.num_txes = blk.tx_hashes.size();
     if (fill_pow_hash)
@@ -2286,7 +2079,7 @@ namespace cryptonote { namespace rpc {
     res.tx_hashes.reserve(blk.tx_hashes.size());
     for (const auto& tx_hash : blk.tx_hashes)
         res.tx_hashes.push_back(tools::type_to_hex(tx_hash));
-    res.blob = oxenmq::to_hex(t_serializable_object_to_blob(blk));
+    res.blob = oxenc::to_hex(t_serializable_object_to_blob(blk));
     res.json = obj_to_json_str(blk);
     res.status = STATUS_OK;
     return res;
@@ -2456,17 +2249,12 @@ namespace cryptonote { namespace rpc {
     }
     else
     {
-      for (const auto &str: req.txids)
+      for (const auto &txid_hex: req.txids)
       {
-        cryptonote::blobdata txid_data;
-        if(!epee::string_tools::parse_hexstr_to_binbuff(str, txid_data))
+        if(!tools::hex_to_type(txid_hex, txids.emplace_back()))
         {
           failed = true;
-        }
-        else
-        {
-          crypto::hash txid = *reinterpret_cast<const crypto::hash*>(txid_data.data());
-          txids.push_back(txid);
+          txids.pop_back();
         }
       }
     }
@@ -2721,20 +2509,17 @@ namespace cryptonote { namespace rpc {
     PERF_TIMER(on_relay_tx);
 
     res.status = "";
-    for (const auto &str: req.txids)
+    for (const auto &txid_hex: req.txids)
     {
-      cryptonote::blobdata txid_data;
-      if(!epee::string_tools::parse_hexstr_to_binbuff(str, txid_data))
+      crypto::hash txid;
+      if (!tools::hex_to_type(txid_hex, txid))
       {
         if (!res.status.empty()) res.status += ", ";
-        res.status += "invalid transaction id: " + str;
+        res.status += "invalid transaction id: " + txid;
         continue;
       }
-      crypto::hash txid = *reinterpret_cast<const crypto::hash*>(txid_data.data());
-
       cryptonote::blobdata txblob;
-      bool r = m_core.get_pool().get_transaction(txid, txblob);
-      if (r)
+      if (m_core.get_pool().get_transaction(txid, txblob))
       {
         cryptonote_connection_context fake_context{};
         NOTIFY_NEW_TRANSACTIONS::request r{};
@@ -2745,8 +2530,7 @@ namespace cryptonote { namespace rpc {
       else
       {
         if (!res.status.empty()) res.status += ", ";
-        res.status += "transaction not found in pool: " + str;
-        continue;
+        res.status += "transaction not found in pool: " + txid_hex;
       }
     }
 
@@ -3276,13 +3060,26 @@ namespace cryptonote { namespace rpc {
     entry.funded                        = info.is_fully_funded();
     entry.state_height                  = info.is_fully_funded()
         ? (info.is_decommissioned() ? info.last_decommission_height : info.active_since_height) : info.last_reward_block_height;
-    entry.earned_downtime_blocks        = master_nodes::quorum_cop::calculate_decommission_credit(info, current_height,info.registration_hf_version);
+    uint8_t hf_version = m_core.get_blockchain_storage().get_network_version();
+    entry.earned_downtime_blocks        = master_nodes::quorum_cop::calculate_decommission_credit(info, current_height,hf_version);
     entry.decommission_count            = info.decommission_count;
     entry.last_decommission_reason_consensus_all      = info.last_decommission_reason_consensus_all;
     entry.last_decommission_reason_consensus_any      = info.last_decommission_reason_consensus_any;
-
-    auto& netconf = m_core.get_net_config();
-    m_core.get_master_node_list().access_proof(mn_info.pubkey, [&entry, &netconf](const auto &proof) {
+    m_core.get_master_node_list().access_proof(mn_info.pubkey, [
+            this, &entry, is_me = (m_core.master_node() && m_core.get_master_keys().pub == mn_info.pubkey)
+    ](const auto &proof) {
+      if (is_me) {
+        entry.master_node_version = BELDEX_VERSION;
+        entry.belnet_version = m_core.belnet_version;
+        entry.storage_server_version = m_core.ss_version;
+        entry.public_ip = epee::string_tools::get_ip_string_from_int32(m_core.mn_public_ip());
+        entry.storage_port = m_core.storage_https_port();
+        entry.storage_lmq_port = m_core.storage_omq_port();
+        entry.quorumnet_port = m_core.quorumnet_port();
+        entry.pubkey_ed25519 = tools::type_to_hex(m_core.get_master_keys().pub_ed25519);
+        entry.pubkey_x25519 = tools::type_to_hex(m_core.get_master_keys().pub_x25519);
+      }
+      else{
         entry.master_node_version     = proof.proof->version;
         entry.belnet_version          = proof.proof->belnet_version;
         entry.storage_server_version   = proof.proof->storage_server_version;
@@ -3292,11 +3089,12 @@ namespace cryptonote { namespace rpc {
         entry.pubkey_ed25519           = proof.proof->pubkey_ed25519 ? tools::type_to_hex(proof.proof->pubkey_ed25519) : "";
         entry.pubkey_x25519            = proof.pubkey_x25519 ? tools::type_to_hex(proof.pubkey_x25519) : "";
         entry.quorumnet_port           = proof.proof->qnet_port;
-
+      } 
         // NOTE: Master Node Testing
         entry.last_uptime_proof                  = proof.timestamp;
         auto system_now = std::chrono::system_clock::now();
         auto steady_now = std::chrono::steady_clock::now();
+        auto& netconf = m_core.get_net_config();
         entry.storage_server_reachable = !proof.ss_reachable.unreachable_for(netconf.UPTIME_PROOF_VALIDITY - netconf.UPTIME_PROOF_FREQUENCY, steady_now);
         entry.storage_server_first_unreachable = reachable_to_time_t(proof.ss_reachable.first_unreachable, system_now, steady_now);
         entry.storage_server_last_unreachable = reachable_to_time_t(proof.ss_reachable.last_unreachable, system_now, steady_now);
@@ -3434,36 +3232,38 @@ namespace cryptonote { namespace rpc {
   }
 
   namespace {
-    struct version_printer { const std::array<uint16_t, 3> &v; };
-    std::ostream &operator<<(std::ostream &o, const version_printer &vp) { return o << vp.v[0] << '.' << vp.v[1] << '.' << vp.v[2]; }
-
     // Handles a ping.  Returns true if the ping was significant (i.e. first ping after startup, or
     // after the ping had expired).  `Success` is a callback that is invoked with a single boolean
     // argument: true if this ping should trigger an immediate proof send (i.e. first ping after
     // startup or after a ping expiry), false for an ordinary ping.
     template <typename RPC, typename Success>
     auto handle_ping(
+            core& core,
             std::array<uint16_t, 3> cur_version,
             std::array<uint16_t, 3> required,
+            std::string_view pubkey_ed25519,
             std::string_view name,
             std::atomic<std::time_t>& update,
             std::chrono::seconds lifetime,
             Success success)
     {
+      std::string our_pubkey_ed25519 = tools::type_to_hex(core.get_master_keys().pub_ed25519);
       typename RPC::response res{};
       if (cur_version < required) {
-        std::ostringstream status;
-        status << "Outdated " << name << ". Current: " << version_printer{cur_version} << " Required: " << version_printer{required};
-        res.status = status.str();
+        res.status = fmt::format("Outdated {}. Current: {}.{}.{}, Required: {}.{}.{}",name, cur_version[0], cur_version[1], cur_version[2], required[0], required[1], required[2]);
+        MERROR(res.status);
+      } else if (!pubkey_ed25519.empty() && !(pubkey_ed25519.find_first_not_of('0') == std::string_view::npos) // TODO: once belnet & ss are always sending this we can remove this empty bypass
+          && (pubkey_ed25519 != our_pubkey_ed25519)) {
+        res.status = fmt::format("Invalid {} pubkey: expected {}, received {}", name, our_pubkey_ed25519, pubkey_ed25519);
         MERROR(res.status);
       } else {
         auto now = std::time(nullptr);
         auto old = update.exchange(now);
         bool significant = std::chrono::seconds{now - old} > lifetime; // Print loudly for the first ping after startup/expiry
         if (significant)
-          MGINFO_GREEN("Received ping from " << name << " " << version_printer{cur_version});
+          MGINFO_GREEN(fmt::format("Received ping from {} {}.{}.{}", name, cur_version[0], cur_version[1], cur_version[2]));
         else
-          MDEBUG("Accepted ping from " << name << " " << version_printer{cur_version});
+          MDEBUG(fmt::format("Accepted ping from {} {}.{}.{}", name, cur_version[0], cur_version[1], cur_version[2]));
         success(significant);
         res.status = STATUS_OK;
       }
@@ -3475,8 +3275,9 @@ namespace cryptonote { namespace rpc {
   STORAGE_SERVER_PING::response core_rpc_server::invoke(STORAGE_SERVER_PING::request&& req, rpc_context context)
   {
     m_core.ss_version = req.version;
-    return handle_ping<STORAGE_SERVER_PING>(
+    return handle_ping<STORAGE_SERVER_PING>(m_core,
       req.version, master_nodes::MIN_STORAGE_SERVER_VERSION,
+      req.pubkey_ed25519,
       "Storage Server", m_core.m_last_storage_server_ping, m_core.get_net_config().UPTIME_PROOF_FREQUENCY,
       [this, &req](bool significant) {
         m_core.m_storage_https_port = req.https_port;
@@ -3489,8 +3290,9 @@ namespace cryptonote { namespace rpc {
   BELNET_PING::response core_rpc_server::invoke(BELNET_PING::request&& req, rpc_context context)
   {
     m_core.belnet_version = req.version;
-    return handle_ping<BELNET_PING>(
+    return handle_ping<BELNET_PING>(m_core,
         req.version, master_nodes::MIN_BELNET_VERSION,
+        req.pubkey_ed25519,
         "Belnet", m_core.m_last_belnet_ping, m_core.get_net_config().UPTIME_PROOF_FREQUENCY,
         [this](bool significant) { if (significant) m_core.reset_proof_interval(); });
   }
@@ -3709,36 +3511,26 @@ namespace cryptonote { namespace rpc {
     bns::name_system_db &db = m_core.get_blockchain_storage().name_system_db();
     for (size_t request_index = 0; request_index < req.entries.size(); request_index++)
     {
-      BNS_NAMES_TO_OWNERS::request_entry const &request = req.entries[request_index];
-      if (!context.admin)
-        check_quantity_limit(request.types.size(), BNS_NAMES_TO_OWNERS::MAX_TYPE_REQUEST_ENTRIES, "types");
-
-      types.clear();
-      if (types.capacity() < request.types.size())
-        types.reserve(request.types.size());
-      for (auto type : request.types)
-      {
-        types.push_back(static_cast<bns::mapping_type>(type));
-        if (!bns::mapping_type_allowed(hf_version, types.back()))
-          throw rpc_error{ERROR_WRONG_PARAM, "Invalid belnet type '" + std::to_string(type) + "'"};
-      }
+      std::string const &req_name_hash = req.entries[request_index];
 
       // This also takes 32 raw bytes, but that is undocumented (because it is painful to pass
       // through json).
-      auto name_hash = bns::name_hash_input_to_base64(request.name_hash);
+      auto name_hash = bns::name_hash_input_to_base64(req_name_hash);
       if (!name_hash)
         throw rpc_error{ERROR_WRONG_PARAM, "Invalid name_hash: expected hash as 64 hex digits or 43/44 base64 characters"};
 
-      std::vector<bns::mapping_record> records = db.get_mappings(types, *name_hash, height);
+      std::vector<bns::mapping_record> records = db.get_mappings(*name_hash, height);
       for (auto const &record : records)
       {
         auto& entry = res.entries.emplace_back();
         entry.entry_index                                      = request_index;
-        entry.type                                             = record.type;
         entry.name_hash                                        = record.name_hash;
         entry.owner                                            = record.owner.to_string(nettype());
         if (record.backup_owner) entry.backup_owner            = record.backup_owner.to_string(nettype());
-        entry.encrypted_value                                  = oxenmq::to_hex(record.encrypted_value.to_view());
+        entry.encrypted_bchat_value                            = oxenc::to_hex(record.encrypted_bchat_value.to_view());
+        entry.encrypted_wallet_value                           = oxenc::to_hex(record.encrypted_wallet_value.to_view());
+        entry.encrypted_belnet_value                           = oxenc::to_hex(record.encrypted_belnet_value.to_view());
+        entry.encrypted_eth_addr_value                         = oxenc::to_hex(record.encrypted_eth_addr_value.to_view());
         entry.expiration_height                                = record.expiration_height;
         entry.update_height                                    = record.update_height;
         entry.txid                                             = tools::type_to_hex(record.txid);
@@ -3748,6 +3540,57 @@ namespace cryptonote { namespace rpc {
     res.status = STATUS_OK;
     return res;
   }
+
+  //------------------------------------------------------------------------------------------------------------------------------
+  BNS_LOOKUP::response core_rpc_server::invoke(BNS_LOOKUP::request&& req, rpc_context context)
+  {
+    BNS_LOOKUP::response res{};
+
+    std::string name = tools::lowercase_ascii_string(std::move(req.name));
+    
+    BNS_NAMES_TO_OWNERS::request name_to_owner_req{};
+    name_to_owner_req.entries.push_back(bns::name_to_base64_hash(name));   
+    auto name_to_owner_res = invoke(std::move(name_to_owner_req), context);
+
+    if(name_to_owner_res.entries.size() != 1){
+        throw rpc_error{ERROR_INVALID_RESULT, "Invalid data returned from BNS_NAMES_TO_OWNERS"};
+    }
+
+    auto entries = name_to_owner_res.entries.back();
+    {
+      res.name_hash                                         = entries.name_hash;
+      res.owner                                             = entries.owner;
+      if (entries.backup_owner) res.backup_owner            = entries.backup_owner;
+      res.expiration_height                                 = entries.expiration_height;
+      res.update_height                                     = entries.update_height;
+      res.txid                                              = entries.txid;
+
+      if(!entries.encrypted_bchat_value.empty()){
+        BNS_VALUE_DECRYPT::request bns_value_decrypt_req{name, "bchat", entries.encrypted_bchat_value};
+        auto bns_value_decrypt_res = invoke(std::move(bns_value_decrypt_req), context);
+        res.bchat_value = bns_value_decrypt_res.value;
+      }
+      if(!entries.encrypted_belnet_value.empty()){
+        BNS_VALUE_DECRYPT::request bns_value_decrypt_req{name, "belnet", entries.encrypted_belnet_value};
+        auto bns_value_decrypt_res = invoke(std::move(bns_value_decrypt_req), context);
+        res.belnet_value = bns_value_decrypt_res.value;
+      }
+      if(!entries.encrypted_wallet_value.empty()){
+        BNS_VALUE_DECRYPT::request bns_value_decrypt_req{name, "wallet", entries.encrypted_wallet_value};
+        auto bns_value_decrypt_res = invoke(std::move(bns_value_decrypt_req), context);
+        res.wallet_value = bns_value_decrypt_res.value;
+      }
+      if(!entries.encrypted_eth_addr_value.empty()){
+        BNS_VALUE_DECRYPT::request bns_value_decrypt_req{name, "eth_addr", entries.encrypted_eth_addr_value};
+        auto bns_value_decrypt_res = invoke(std::move(bns_value_decrypt_req), context);
+        res.eth_addr_value = bns_value_decrypt_res.value;
+      }
+    }
+
+    res.status = STATUS_OK;
+    return res;
+  }
+
   //------------------------------------------------------------------------------------------------------------------------------
   BNS_OWNERS_TO_NAMES::response core_rpc_server::invoke(BNS_OWNERS_TO_NAMES::request&& req, rpc_context context)
   {
@@ -3796,11 +3639,13 @@ namespace cryptonote { namespace rpc {
 
       auto& entry = res.entries.emplace_back();
       entry.request_index   = it->second;
-      entry.type            = record.type;
       entry.name_hash       = std::move(record.name_hash);
       if (record.owner) entry.owner = record.owner.to_string(nettype());
       if (record.backup_owner) entry.backup_owner = record.backup_owner.to_string(nettype());
-      entry.encrypted_value = oxenmq::to_hex(record.encrypted_value.to_view());
+      entry.encrypted_bchat_value = oxenc::to_hex(record.encrypted_bchat_value.to_view());
+      entry.encrypted_wallet_value = oxenc::to_hex(record.encrypted_wallet_value.to_view());
+      entry.encrypted_belnet_value = oxenc::to_hex(record.encrypted_belnet_value.to_view());
+      entry.encrypted_eth_addr_value = oxenc::to_hex(record.encrypted_eth_addr_value.to_view());
       entry.update_height   = record.update_height;
       entry.expiration_height = record.expiration_height;
       entry.txid            = tools::type_to_hex(record.txid);
@@ -3815,7 +3660,7 @@ namespace cryptonote { namespace rpc {
   {
     BNS_RESOLVE::response res{};
 
-    if (req.type >= tools::enum_count<bns::mapping_type>)
+    if (req.type >= static_cast<std::underlying_type_t<bns::mapping_type>>(bns::mapping_type::belnet_2years))
       throw rpc_error{ERROR_WRONG_PARAM, "Unable to resolve BNS address: 'type' parameter not specified"};
 
     auto name_hash = bns::name_hash_input_to_base64(req.name_hash);
@@ -3825,18 +3670,65 @@ namespace cryptonote { namespace rpc {
 
     uint8_t hf_version = m_core.get_blockchain_storage().get_network_version();
     auto type = static_cast<bns::mapping_type>(req.type);
-    if (!bns::mapping_type_allowed(hf_version, type))
-      throw rpc_error{ERROR_WRONG_PARAM, "Invalid belnet type '" + std::to_string(req.type) + "'"};
 
     if (auto mapping = m_core.get_blockchain_storage().name_system_db().resolve(
         type, *name_hash, m_core.get_current_blockchain_height()))
     {
       auto [val, nonce] = mapping->value_nonce(type);
-      res.encrypted_value = oxenmq::to_hex(val);
+      res.encrypted_value = oxenc::to_hex(val);
       if (val.size() < mapping->to_view().size())
-        res.nonce = oxenmq::to_hex(nonce);
+        res.nonce = oxenc::to_hex(nonce);
     }
     return res;
   }
+  //------------------------------------------------------------------------------------------------------------------------------
+  BNS_VALUE_DECRYPT::response core_rpc_server::invoke(BNS_VALUE_DECRYPT::request&& req, rpc_context context)
+  {
+    BNS_VALUE_DECRYPT::response res{};
 
+    // ---------------------------------------------------------------------------------------------
+    //
+    // Validate encrypted value
+    //
+    // ---------------------------------------------------------------------------------------------
+    if (req.encrypted_value.size() % 2 != 0)
+      throw rpc_error{ERROR_INVALID_VALUE_LENGTH, "Value length not divisible by 2, length=" + std::to_string(req.encrypted_value.size())};
+
+    if ((req.encrypted_value.size() >= (bns::mapping_value::BUFFER_SIZE * 2)) && !(req.type =="wallet"))
+      throw rpc_error{ERROR_INVALID_VALUE_LENGTH, "Value too long to decrypt=" + req.encrypted_value};
+
+    if (!oxenc::is_hex(req.encrypted_value))
+      throw rpc_error{ERROR_INVALID_VALUE_LENGTH, "Value is not hex=" + req.encrypted_value};
+
+    // ---------------------------------------------------------------------------------------------
+    //
+    // Validate type and name
+    //
+    // ---------------------------------------------------------------------------------------------
+    std::string reason;
+    bns::mapping_type type = {};
+
+    std::optional<uint8_t> hf_version = m_core.get_blockchain_storage().get_network_version();
+    if (!bns::validate_mapping_type(req.type, *hf_version, &type, &reason))
+      throw rpc_error{ERROR_INVALID_VALUE_LENGTH, "Invalid BNS type: " + reason};
+
+     if (!bns::validate_bns_name(req.name, &reason))
+      throw rpc_error{ERROR_INVALID_VALUE_LENGTH, "Invalid BNS name '" + req.name + "': " + reason};
+    
+    // ---------------------------------------------------------------------------------------------
+    //
+    // Decrypt value
+    //
+    // ---------------------------------------------------------------------------------------------
+    bns::mapping_value value = {};
+    value.len = req.encrypted_value.size() / 2;
+    value.encrypted = true;
+    oxenc::from_hex(req.encrypted_value.begin(), req.encrypted_value.end(), value.buffer.begin());
+
+    if (!value.decrypt(req.name, type))
+      throw rpc_error{ERROR_INTERNAL, "Value decryption failure"};
+
+    res.value = value.to_readable_value(nettype(), type);
+    return res;
+  }
 } }  // namespace cryptonote
